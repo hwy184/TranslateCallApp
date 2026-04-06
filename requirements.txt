@@ -1,0 +1,19 @@
+# Core LiveKit Agents
+livekit-agents
+livekit-plugins-openai
+livekit-plugins-silero
+
+# LLM & Transcription
+whisper
+openai
+httpx
+
+# TTS & Audio Processing
+edge-tts
+pydub
+numpy
+
+# Others
+fastapi
+uvicorn
+python-dotenv

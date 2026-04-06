@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.env
+blobs/
+manifests/
+temp_tts_*.mp3
+audio_test/
+textOutput/
