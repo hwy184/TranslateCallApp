@@ -17,3 +17,4 @@ uvicorn app.main:app --host 0.0.0.0 --port 8090 --reload
 - `GET /internal/sessions`: inspect current sessions.
 - `POST /internal/sessions/{session_id}/simulate-utterance`: run pipeline with fallback/context (debug endpoint).
 - `GET /internal/sessions/{session_id}/events`: inspect emitted events (`subtitle.final`, `translation.final`, `warning`, `error`, `session.state`).
+- Worker auto-pushes events to backend via `BACKEND_EVENTS_URL` with retry (`BACKEND_EVENTS_RETRIES`).

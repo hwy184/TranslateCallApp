@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from .models import SessionEvent, SimulateUtteranceRequest
-from ..providers.fallback import run_with_fallback
+from ..providers.fallback import FallbackExhaustedError, run_with_fallback
 from ..providers.registry import ProviderBundle
 
 
@@ -35,10 +35,6 @@ class RoomPipelineSession:
                 type="session.state",
                 session_id=self.session_id,
                 room_id=self.room_id,
-                utterance_id="system",
-                speaker_identity="worker",
-                source_lang="vi",
-                target_lang="en",
                 timestamp=self.created_at,
                 text="running",
                 details={"provider_profile": self.provider_bundle.profile},
@@ -53,10 +49,6 @@ class RoomPipelineSession:
                 type="session.state",
                 session_id=self.session_id,
                 room_id=self.room_id,
-                utterance_id="system",
-                speaker_identity="worker",
-                source_lang="vi",
-                target_lang="en",
                 timestamp=self.updated_at,
                 text="stopped",
                 details={"provider_profile": self.provider_bundle.profile},
@@ -75,8 +67,9 @@ class RoomPipelineSession:
 
         try:
             stt_result, stt_warnings = await run_with_fallback(
-                self.provider_bundle.stt_chain,
-                lambda provider: provider.transcribe(request.text, request.source_lang),
+                stage="stt",
+                providers=self.provider_bundle.stt_chain,
+                invoke=lambda provider: provider.transcribe(request.text, request.source_lang),
             )
             result_events.extend(self._warning_events(stt_warnings, utterance_id, request))
 
@@ -96,8 +89,9 @@ class RoomPipelineSession:
             result_events.append(subtitle_event)
 
             translation_result, translate_warnings = await run_with_fallback(
-                self.provider_bundle.translate_chain,
-                lambda provider: provider.translate(
+                stage="translate",
+                providers=self.provider_bundle.translate_chain,
+                invoke=lambda provider: provider.translate(
                     stt_result.text,
                     stt_result.detected_language,
                     request.target_lang,
@@ -106,11 +100,11 @@ class RoomPipelineSession:
             )
             result_events.extend(self._warning_events(translate_warnings, utterance_id, request))
 
-            tts_result, tts_warnings = await run_with_fallback(
-                self.provider_bundle.tts_chain,
-                lambda provider: provider.synthesize(translation_result.translated_text, request.voice_profile),
-            )
-            result_events.extend(self._warning_events(tts_warnings, utterance_id, request))
+            translation_details: dict[str, str | None] = {
+                "translate_provider": translation_result.provider,
+                "tts_provider": None,
+                "audio_ref": None,
+            }
 
             translation_event = SessionEvent(
                 type="translation.final",
@@ -123,14 +117,29 @@ class RoomPipelineSession:
                 timestamp=utc_now_iso(),
                 text=stt_result.text,
                 translated_text=translation_result.translated_text,
-                details={
-                    "translate_provider": translation_result.provider,
-                    "tts_provider": tts_result.provider,
-                    "audio_ref": tts_result.audio_ref,
-                },
+                details=translation_details,
             )
             self.events.append(translation_event)
             result_events.append(translation_event)
+
+            try:
+                tts_result, tts_warnings = await run_with_fallback(
+                    stage="tts",
+                    providers=self.provider_bundle.tts_chain,
+                    invoke=lambda provider: provider.synthesize(translation_result.translated_text, request.voice_profile),
+                )
+                translation_details["tts_provider"] = tts_result.provider
+                translation_details["audio_ref"] = tts_result.audio_ref
+                result_events.extend(self._warning_events(tts_warnings, utterance_id, request))
+            except FallbackExhaustedError as exhausted:
+                result_events.extend(self._warning_events(exhausted.warnings, utterance_id, request))
+                result_events.extend(
+                    self._warning_events(
+                        [{"provider": "tts_chain", "error": str(exhausted)}],
+                        utterance_id,
+                        request,
+                    )
+                )
 
             context.append(
                 {
@@ -138,6 +147,22 @@ class RoomPipelineSession:
                     "translated_text": translation_result.translated_text,
                 }
             )
+            return result_events
+        except FallbackExhaustedError as exhausted:
+            result_events.extend(self._warning_events(exhausted.warnings, utterance_id, request))
+            error_event = SessionEvent(
+                type="error",
+                session_id=self.session_id,
+                room_id=self.room_id,
+                utterance_id=utterance_id,
+                speaker_identity=request.speaker_identity,
+                source_lang=request.source_lang,
+                target_lang=request.target_lang,
+                timestamp=utc_now_iso(),
+                details={"stage": exhausted.stage, "error": str(exhausted)},
+            )
+            self.events.append(error_event)
+            result_events.append(error_event)
             return result_events
         except Exception as exc:  # noqa: BLE001
             error_event = SessionEvent(

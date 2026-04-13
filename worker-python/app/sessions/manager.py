@@ -1,14 +1,18 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from .models import SessionState, StartSessionRequest, SimulateUtteranceRequest
 from .room_pipeline_session import RoomPipelineSession
 from ..providers.registry import ProviderRegistry
+from .models import SessionEvent
 
 
 class SessionManager:
-    def __init__(self) -> None:
+    def __init__(self, event_sink: Callable[[list[SessionEvent]], Awaitable[None]] | None = None) -> None:
         self._lock = asyncio.Lock()
         self._registry = ProviderRegistry()
         self._sessions: dict[str, RoomPipelineSession] = {}
+        self._event_sink = event_sink
+        self._emit_tasks: set[asyncio.Task[None]] = set()
 
     async def start_session(self, payload: StartSessionRequest) -> SessionState:
         async with self._lock:
@@ -24,7 +28,10 @@ class SessionManager:
                 context_window=payload.context_window,
             )
             self._sessions[payload.session_id] = session
-            return self._to_state(session)
+            state = self._to_state(session)
+
+        await self._emit(session.list_events()[-1:])
+        return state
 
     async def stop_session(self, session_id: str) -> SessionState | None:
         async with self._lock:
@@ -33,7 +40,11 @@ class SessionManager:
                 return None
 
             current.stop()
-            return self._to_state(current)
+            state = self._to_state(current)
+            stop_event = current.list_events()[-1:]
+
+        await self._emit(stop_event)
+        return state
 
     async def list_sessions(self) -> list[SessionState]:
         async with self._lock:
@@ -55,6 +66,7 @@ class SessionManager:
                 return session, []
 
         events = await session.process_utterance(payload)
+        await self._emit(events)
         return session, events
 
     async def list_session_events(self, session_id: str):
@@ -73,3 +85,16 @@ class SessionManager:
             created_at=session.created_at,
             updated_at=session.updated_at,
         )
+
+    async def _emit(self, events: list[SessionEvent]) -> None:
+        if not events or self._event_sink is None:
+            return
+        task = asyncio.create_task(self._event_sink(events))
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
+
+    async def close(self) -> None:
+        if not self._emit_tasks:
+            return
+        tasks = list(self._emit_tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)

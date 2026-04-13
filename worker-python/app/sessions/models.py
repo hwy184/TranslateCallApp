@@ -40,10 +40,10 @@ class SessionEvent(BaseModel):
     type: str
     session_id: str
     room_id: str
-    utterance_id: str
-    speaker_identity: str
-    source_lang: str
-    target_lang: str
+    utterance_id: str | None = None
+    speaker_identity: str | None = None
+    source_lang: str | None = None
+    target_lang: str | None = None
     timestamp: str
     text: str | None = None
     translated_text: str | None = None

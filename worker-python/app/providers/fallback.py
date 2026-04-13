@@ -6,7 +6,17 @@ from typing import TypeVar
 T = TypeVar("T")
 
 
+class FallbackExhaustedError(Exception):
+    def __init__(self, stage: str, warnings: list[dict[str, str]], last_error: Exception | None = None):
+        self.stage = stage
+        self.warnings = warnings
+        self.last_error = last_error
+        detail = str(last_error) if last_error else "fallback_chain_exhausted"
+        super().__init__(f"{stage}_fallback_exhausted: {detail}")
+
+
 async def run_with_fallback(
+    stage: str,
     providers: list[object],
     invoke: Callable[[object], Awaitable[T]],
 ) -> tuple[T, list[dict[str, str]]]:
@@ -28,5 +38,5 @@ async def run_with_fallback(
             last_error = exc
 
     if last_error is None:
-        raise RuntimeError("fallback_chain_empty")
-    raise last_error
+        raise FallbackExhaustedError(stage=stage, warnings=warnings, last_error=RuntimeError("fallback_chain_empty"))
+    raise FallbackExhaustedError(stage=stage, warnings=warnings, last_error=last_error)

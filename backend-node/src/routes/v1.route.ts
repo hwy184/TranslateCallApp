@@ -5,6 +5,7 @@ import { persistence } from "../services/persistence.js";
 import { startWorkerSession, stopWorkerSession } from "../services/worker-client.js";
 import { ERROR_CODES, sendError } from "../types/api-error.js";
 import type { ParticipantSettings } from "../types/domain.js";
+import type { WorkerEventPayload } from "../types/worker-event.js";
 
 const v1Router = Router();
 
@@ -56,6 +57,56 @@ const patchSettingsSchema = z.object({
   target_language: z.string().min(2).optional(),
   voice_profile: z.string().min(1).optional()
 });
+
+const historyQuerySchema = z.object({
+  room_id: z.string().min(1).optional(),
+  session_id: z.string().min(1).optional(),
+  limit: z.coerce.number().int().positive().max(500).default(100)
+});
+
+const workerEventSchema = z
+  .object({
+    type: z.enum([
+      "subtitle.partial",
+      "subtitle.final",
+      "translation.final",
+      "session.state",
+      "participant.state",
+      "warning",
+      "error"
+    ]),
+    session_id: z.string().min(1),
+    room_id: z.string().min(1),
+    timestamp: z.string().datetime({ offset: true }),
+    utterance_id: z.string().min(1).optional(),
+    speaker_identity: z.string().min(1).optional(),
+    source_lang: z.string().min(2).optional(),
+    target_lang: z.string().min(2).optional(),
+    text: z.string().optional(),
+    translated_text: z.string().optional(),
+    details: z.record(z.unknown()).optional()
+  })
+  .superRefine((event, ctx) => {
+    const needsUtteranceFields = event.type === "subtitle.final" || event.type === "translation.final";
+    if (needsUtteranceFields) {
+      if (!event.utterance_id) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["utterance_id"], message: "utterance_id is required for subtitle/translation events" });
+      }
+      if (!event.speaker_identity) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["speaker_identity"], message: "speaker_identity is required for subtitle/translation events" });
+      }
+      if (!event.source_lang) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["source_lang"], message: "source_lang is required for subtitle/translation events" });
+      }
+      if (!event.target_lang) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["target_lang"], message: "target_lang is required for subtitle/translation events" });
+      }
+    }
+
+    if (event.type === "translation.final" && !event.translated_text) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["translated_text"], message: "translated_text is required for translation.final" });
+    }
+  });
 
 function participantMetadata(role: "host" | "guest", identity: string, settings: ParticipantSettings) {
   return {
@@ -290,11 +341,23 @@ v1Router.patch("/rooms/:roomId/participants/:participantId/settings", async (req
   }
 });
 
-v1Router.get("/history", (_req, res) => {
-  res.status(200).json({
-    items: [],
-    note: "history persistence will be implemented in Task 3 with PostgreSQL"
-  });
+v1Router.get("/history", async (req, res) => {
+  try {
+    const query = historyQuerySchema.parse(req.query);
+    const items = await persistence.listHistory({
+      roomId: query.room_id,
+      sessionId: query.session_id,
+      limit: query.limit
+    });
+    res.status(200).json({ items });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Invalid history query", error.issues);
+      return;
+    }
+    const message = error instanceof Error ? error.message : "history_list_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "List history failed", message);
+  }
 });
 
 v1Router.delete("/history/:id", (_req, res) => {
@@ -311,10 +374,14 @@ v1Router.post("/translate/text", (_req, res) => {
 
 v1Router.post("/internal/worker/events", async (req, res) => {
   try {
-    const payload = z.record(z.unknown()).parse(req.body);
-    await persistence.appendWorkerEvent(payload);
+    const payload = workerEventSchema.parse(req.body) as WorkerEventPayload;
+    await persistence.recordWorkerEvent(payload);
     res.status(202).json({ accepted: true });
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Invalid worker event payload", error.issues);
+      return;
+    }
     const message = error instanceof Error ? error.message : "append_worker_event_failed";
     sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Append worker event failed", message);
   }

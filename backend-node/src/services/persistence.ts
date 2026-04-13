@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { pool, withTransaction } from "../db/client.js";
 import type { AuthSession, Participant, ParticipantRole, ParticipantSettings, Room, User } from "../types/domain.js";
+import type { HistoryItem, WorkerEventPayload } from "../types/worker-event.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -299,8 +300,41 @@ export const persistence = {
     return mapParticipant(result.rows[0]);
   },
 
-  async appendWorkerEvent(event: Record<string, unknown>): Promise<void> {
-    await pool.query("INSERT INTO worker_events(payload) VALUES ($1::jsonb)", [JSON.stringify(event)]);
+  async recordWorkerEvent(event: WorkerEventPayload): Promise<void> {
+    await withTransaction(async (client) => {
+      await client.query("INSERT INTO worker_events(payload) VALUES ($1::jsonb)", [JSON.stringify(event)]);
+
+      const isTranscriptEvent = event.type === "subtitle.final" || event.type === "translation.final" || event.type === "warning" || event.type === "error";
+      const hasTranscriptKeys =
+        typeof event.utterance_id === "string" &&
+        typeof event.speaker_identity === "string" &&
+        typeof event.source_lang === "string" &&
+        typeof event.target_lang === "string";
+
+      if (!isTranscriptEvent || !hasTranscriptKeys) {
+        return;
+      }
+
+      await client.query(
+        `
+          INSERT INTO transcript_items(
+            room_id, session_id, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `,
+        [
+          event.room_id,
+          event.session_id,
+          event.utterance_id,
+          event.speaker_identity,
+          event.source_lang,
+          event.target_lang,
+          event.text ?? null,
+          event.translated_text ?? null,
+          event.type
+        ]
+      );
+    });
   },
 
   async listWorkerEvents(limit = 100): Promise<Array<Record<string, unknown>>> {
@@ -318,5 +352,56 @@ export const persistence = {
     return result.rows
       .reverse()
       .map((row) => ({ ...(row.payload as Record<string, unknown>), received_at: new Date(String(row.received_at)).toISOString() }));
+  },
+
+  async listHistory(input: { roomId?: string; sessionId?: string; limit?: number }): Promise<HistoryItem[]> {
+    const boundedLimit = Math.max(1, Math.min(500, input.limit ?? 100));
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+
+    if (input.roomId) {
+      params.push(input.roomId);
+      clauses.push(`room_id = $${params.length}`);
+    }
+    if (input.sessionId) {
+      params.push(input.sessionId);
+      clauses.push(`session_id = $${params.length}`);
+    }
+
+    params.push(boundedLimit);
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const query = `
+      SELECT
+        id,
+        room_id,
+        session_id,
+        utterance_id,
+        speaker_identity,
+        source_lang,
+        target_lang,
+        source_text,
+        translated_text,
+        event_type,
+        created_at
+      FROM transcript_items
+      ${where}
+      ORDER BY id DESC
+      LIMIT $${params.length}
+    `;
+
+    const result = await pool.query(query, params);
+    return result.rows.map((row) => ({
+      id: Number(row.id),
+      room_id: String(row.room_id),
+      session_id: String(row.session_id),
+      utterance_id: String(row.utterance_id),
+      speaker_identity: String(row.speaker_identity),
+      source_lang: String(row.source_lang),
+      target_lang: String(row.target_lang),
+      source_text: row.source_text ? String(row.source_text) : null,
+      translated_text: row.translated_text ? String(row.translated_text) : null,
+      event_type: String(row.event_type),
+      created_at: new Date(String(row.created_at)).toISOString()
+    }));
   }
 };
