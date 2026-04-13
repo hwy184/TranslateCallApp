@@ -7,11 +7,18 @@ from .models import SessionEvent
 
 
 class SessionManager:
-    def __init__(self, event_sink: Callable[[list[SessionEvent]], Awaitable[None]] | None = None) -> None:
+    def __init__(
+        self,
+        event_sink: Callable[[list[SessionEvent]], Awaitable[None]] | None = None,
+        on_session_start: Callable[[RoomPipelineSession], Awaitable[None]] | None = None,
+        on_session_stop: Callable[[RoomPipelineSession], Awaitable[None]] | None = None,
+    ) -> None:
         self._lock = asyncio.Lock()
         self._registry = ProviderRegistry()
         self._sessions: dict[str, RoomPipelineSession] = {}
         self._event_sink = event_sink
+        self._on_session_start = on_session_start
+        self._on_session_stop = on_session_stop
         self._emit_tasks: set[asyncio.Task[None]] = set()
 
     async def start_session(self, payload: StartSessionRequest) -> SessionState:
@@ -25,11 +32,16 @@ class SessionManager:
                 session_id=payload.session_id,
                 room_id=payload.room_id,
                 provider_bundle=provider_bundle,
+                participants=payload.participants,
+                room_metadata=payload.room_metadata,
+                livekit=payload.livekit,
                 context_window=payload.context_window,
             )
             self._sessions[payload.session_id] = session
             state = self._to_state(session)
 
+        if self._on_session_start is not None:
+            await self._on_session_start(session)
         await self._emit(session.list_events()[-1:])
         return state
 
@@ -43,6 +55,8 @@ class SessionManager:
             state = self._to_state(current)
             stop_event = current.list_events()[-1:]
 
+        if self._on_session_stop is not None:
+            await self._on_session_stop(current)
         await self._emit(stop_event)
         return state
 
@@ -94,6 +108,14 @@ class SessionManager:
         task.add_done_callback(self._emit_tasks.discard)
 
     async def close(self) -> None:
+        if self._on_session_stop is not None:
+            async with self._lock:
+                sessions = list(self._sessions.values())
+            for session in sessions:
+                if session.status == "running":
+                    session.stop()
+                    await self._on_session_stop(session)
+
         if not self._emit_tasks:
             return
         tasks = list(self._emit_tasks)

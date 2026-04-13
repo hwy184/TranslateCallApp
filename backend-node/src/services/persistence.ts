@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { pool, withTransaction } from "../db/client.js";
 import type { AuthSession, Participant, ParticipantRole, ParticipantSettings, Room, User } from "../types/domain.js";
-import type { HistoryItem, WorkerEventPayload } from "../types/worker-event.js";
+import type { HistoryItem, VoicePreference, WorkerEventPayload } from "../types/worker-event.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -300,6 +300,21 @@ export const persistence = {
     return mapParticipant(result.rows[0]);
   },
 
+  async getParticipantById(participantId: string): Promise<Participant | undefined> {
+    const result = await pool.query(
+      `
+        SELECT participant_id, identity, role, user_id, settings, joined_at
+        FROM participants
+        WHERE participant_id = $1
+      `,
+      [participantId]
+    );
+    if ((result.rowCount ?? 0) === 0) {
+      return undefined;
+    }
+    return mapParticipant(result.rows[0]);
+  },
+
   async recordWorkerEvent(event: WorkerEventPayload): Promise<void> {
     await withTransaction(async (client) => {
       await client.query("INSERT INTO worker_events(payload) VALUES ($1::jsonb)", [JSON.stringify(event)]);
@@ -403,5 +418,47 @@ export const persistence = {
       event_type: String(row.event_type),
       created_at: new Date(String(row.created_at)).toISOString()
     }));
+  },
+
+  async deleteHistoryItem(id: number): Promise<boolean> {
+    const result = await pool.query("DELETE FROM transcript_items WHERE id = $1", [id]);
+    return (result.rowCount ?? 0) > 0;
+  },
+
+  async upsertVoicePreference(input: {
+    userId: string;
+    settings: Record<string, unknown>;
+  }): Promise<VoicePreference> {
+    return withTransaction(async (client) => {
+      const userResult = await client.query(
+        "SELECT user_id, user_type FROM users WHERE user_id = $1",
+        [input.userId]
+      );
+      if ((userResult.rowCount ?? 0) === 0) {
+        throw new Error("user_not_found");
+      }
+
+      const userType = String(userResult.rows[0].user_type);
+      if (userType !== "registered") {
+        throw new Error("user_not_registered");
+      }
+
+      const upsert = await client.query(
+        `
+          INSERT INTO voice_preferences(user_id, settings, updated_at)
+          VALUES ($1, $2::jsonb, NOW())
+          ON CONFLICT (user_id)
+          DO UPDATE SET settings = voice_preferences.settings || EXCLUDED.settings, updated_at = NOW()
+          RETURNING user_id, settings, updated_at
+        `,
+        [input.userId, JSON.stringify(input.settings)]
+      );
+
+      return {
+        user_id: String(upsert.rows[0].user_id),
+        settings: (upsert.rows[0].settings as Record<string, unknown>) ?? {},
+        updated_at: new Date(String(upsert.rows[0].updated_at)).toISOString(),
+      };
+    });
   }
 };

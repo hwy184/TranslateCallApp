@@ -34,3 +34,9 @@ export interface HistoryItem {
   event_type: string;
   created_at: string;
 }
+
+export interface VoicePreference {
+  user_id: string;
+  settings: Record<string, unknown>;
+  updated_at: string;
+}

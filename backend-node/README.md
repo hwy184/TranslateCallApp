@@ -22,3 +22,5 @@ npm run dev
 - `PATCH /api/v1/rooms/{roomId}/participants/{participantId}/settings`: update participant language/voice settings.
 - `POST /api/v1/internal/worker/events`: receive worker status events (persisted in PostgreSQL).
 - `GET /api/v1/history`: read transcript/history from `transcript_items` table (supports `room_id`, `session_id`, `limit`).
+- `DELETE /api/v1/history/{id}`: delete one history item by id.
+- `PUT /api/v1/me/preferences/voice`: upsert cloud voice preferences for registered user.

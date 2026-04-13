@@ -4,6 +4,22 @@ interface StartWorkerSessionInput {
   sessionId: string;
   roomId: string;
   providerProfile: string;
+  roomMetadata: {
+    mode: "bidirectional";
+    audio_mode: "translated_only";
+    supported_languages: string[];
+    provider_profile: string;
+  };
+  participants: Array<{
+    role: "host" | "guest";
+    identity: string;
+    source_language: string;
+    target_language: string;
+    voice_profile: string;
+  }>;
+  livekit?: {
+    worker_identity?: string;
+  };
 }
 
 async function parseSafeJson(response: Response): Promise<unknown> {
@@ -22,7 +38,10 @@ export async function startWorkerSession(input: StartWorkerSessionInput): Promis
     body: JSON.stringify({
       session_id: input.sessionId,
       room_id: input.roomId,
-      provider_profile: input.providerProfile
+      provider_profile: input.providerProfile,
+      room_metadata: input.roomMetadata,
+      participants: input.participants,
+      livekit: input.livekit ?? {}
     })
   });
 

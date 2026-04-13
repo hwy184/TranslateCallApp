@@ -11,6 +11,9 @@ class StartSessionRequest(BaseModel):
     room_id: str = Field(min_length=1)
     provider_profile: str = Field(default="silero+google_stt+openai_translate+google_tts")
     context_window: int = Field(default=5, ge=3, le=10)
+    room_metadata: dict[str, object] | None = None
+    participants: list[dict[str, str]] = Field(default_factory=list)
+    livekit: dict[str, str] | None = None
 
 
 class StopSessionRequest(BaseModel):
@@ -28,11 +31,11 @@ class SessionState(BaseModel):
 
 class SimulateUtteranceRequest(BaseModel):
     speaker_identity: str = Field(min_length=1)
-    target_identity: str = Field(min_length=1)
+    target_identity: str | None = None
     text: str = Field(min_length=1)
-    source_lang: str = Field(default="vi", min_length=2)
-    target_lang: str = Field(default="en", min_length=2)
-    voice_profile: str = Field(default="default", min_length=1)
+    source_lang: str | None = Field(default=None, min_length=2)
+    target_lang: str | None = Field(default=None, min_length=2)
+    voice_profile: str | None = Field(default=None, min_length=1)
     utterance_id: str | None = None
 
 

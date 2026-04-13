@@ -58,6 +58,13 @@ const patchSettingsSchema = z.object({
   voice_profile: z.string().min(1).optional()
 });
 
+const voicePreferenceSchema = z.object({
+  user_id: z.string().min(1),
+  speed: z.number().min(0.5).max(2).optional(),
+  gender: z.enum(["male", "female", "neutral"]).optional(),
+  profile: z.string().min(1).optional()
+});
+
 const historyQuerySchema = z.object({
   room_id: z.string().min(1).optional(),
   session_id: z.string().min(1).optional(),
@@ -227,10 +234,42 @@ v1Router.post("/rooms/join", async (req, res) => {
       return;
     }
 
+    const hostParticipant = await persistence.getParticipantById(room.hostParticipantId);
+    const participantsPayload = [
+      ...(hostParticipant
+        ? [
+            {
+              role: "host" as const,
+              identity: hostParticipant.identity,
+              source_language: hostParticipant.settings.source_language,
+              target_language: hostParticipant.settings.target_language,
+              voice_profile: hostParticipant.settings.voice_profile
+            }
+          ]
+        : []),
+      {
+        role: "guest" as const,
+        identity: payload.guest_identity,
+        source_language: payload.guest_settings.source_language,
+        target_language: payload.guest_settings.target_language,
+        voice_profile: payload.guest_settings.voice_profile
+      }
+    ];
+
     await startWorkerSession({
       sessionId: room.sessionId,
       roomId: room.roomId,
-      providerProfile: room.providerProfile
+      providerProfile: room.providerProfile,
+      roomMetadata: {
+        mode: "bidirectional",
+        audio_mode: "translated_only",
+        supported_languages: room.supportedLanguages,
+        provider_profile: room.providerProfile
+      },
+      participants: participantsPayload,
+      livekit: {
+        worker_identity: `ai_worker_${room.sessionId.slice(0, 8)}`
+      }
     });
 
     let joined;
@@ -265,7 +304,8 @@ v1Router.post("/rooms/join", async (req, res) => {
       },
       worker_session: {
         session_id: joined.room.sessionId,
-        state: "started"
+        state: "started",
+        participants: participantsPayload.length
       },
       livekit: {
         room_name: joined.room.roomId,
@@ -360,12 +400,55 @@ v1Router.get("/history", async (req, res) => {
   }
 });
 
-v1Router.delete("/history/:id", (_req, res) => {
-  sendError(res, 501, ERROR_CODES.NOT_IMPLEMENTED, "DELETE /history/{id} is planned for Task 3");
+v1Router.delete("/history/:id", async (req, res) => {
+  try {
+    const id = z.coerce.number().int().positive().parse(req.params.id);
+    const removed = await persistence.deleteHistoryItem(id);
+    if (!removed) {
+      sendError(res, 404, ERROR_CODES.HISTORY_NOT_FOUND, "History item was not found");
+      return;
+    }
+    res.status(200).json({ deleted: true, id });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Invalid history id", error.issues);
+      return;
+    }
+    const message = error instanceof Error ? error.message : "delete_history_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Delete history failed", message);
+  }
 });
 
-v1Router.put("/me/preferences/voice", (_req, res) => {
-  sendError(res, 501, ERROR_CODES.NOT_IMPLEMENTED, "PUT /me/preferences/voice is planned for Task 3");
+v1Router.put("/me/preferences/voice", async (req, res) => {
+  try {
+    const payload = voicePreferenceSchema.parse(req.body);
+    const settings: Record<string, unknown> = {};
+    if (payload.speed !== undefined) settings.speed = payload.speed;
+    if (payload.gender !== undefined) settings.gender = payload.gender;
+    if (payload.profile !== undefined) settings.profile = payload.profile;
+
+    const preference = await persistence.upsertVoicePreference({
+      userId: payload.user_id,
+      settings
+    });
+    res.status(200).json({ preference });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Invalid voice preference payload", error.issues);
+      return;
+    }
+
+    const message = error instanceof Error ? error.message : "upsert_voice_preference_failed";
+    if (message === "user_not_found") {
+      sendError(res, 404, ERROR_CODES.USER_NOT_FOUND, "User was not found");
+      return;
+    }
+    if (message === "user_not_registered") {
+      sendError(res, 403, ERROR_CODES.USER_NOT_REGISTERED, "Guest users cannot sync cloud voice preferences");
+      return;
+    }
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Update voice preference failed", message);
+  }
 });
 
 v1Router.post("/translate/text", (_req, res) => {
