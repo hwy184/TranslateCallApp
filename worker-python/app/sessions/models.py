@@ -9,7 +9,8 @@ def utc_now_iso() -> str:
 class StartSessionRequest(BaseModel):
     session_id: str = Field(min_length=1)
     room_id: str = Field(min_length=1)
-    provider_profile: str = Field(default="production-default")
+    provider_profile: str = Field(default="silero+google_stt+openai_translate+google_tts")
+    context_window: int = Field(default=5, ge=3, le=10)
 
 
 class StopSessionRequest(BaseModel):
@@ -23,3 +24,27 @@ class SessionState(BaseModel):
     status: str
     created_at: str
     updated_at: str
+
+
+class SimulateUtteranceRequest(BaseModel):
+    speaker_identity: str = Field(min_length=1)
+    target_identity: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    source_lang: str = Field(default="vi", min_length=2)
+    target_lang: str = Field(default="en", min_length=2)
+    voice_profile: str = Field(default="default", min_length=1)
+    utterance_id: str | None = None
+
+
+class SessionEvent(BaseModel):
+    type: str
+    session_id: str
+    room_id: str
+    utterance_id: str
+    speaker_identity: str
+    source_lang: str
+    target_lang: str
+    timestamp: str
+    text: str | None = None
+    translated_text: str | None = None
+    details: dict[str, str] | dict[str, object] | None = None

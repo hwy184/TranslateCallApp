@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { createLivekitToken } from "../services/livekit-token.js";
-import { store } from "../services/store.js";
+import { persistence } from "../services/persistence.js";
 import { startWorkerSession, stopWorkerSession } from "../services/worker-client.js";
 import { ERROR_CODES, sendError } from "../types/api-error.js";
 import type { ParticipantSettings } from "../types/domain.js";
@@ -77,72 +77,92 @@ function roomMetadata(sessionId: string, providerProfile: string, supportedLangu
   };
 }
 
-v1Router.post("/auth/guest", (req, res) => {
-  const payload = authGuestSchema.parse(req.body);
-  const result = store.createGuest(payload.display_name);
-  res.status(201).json({
-    user: result.user,
-    session: result.session
-  });
-});
-
-v1Router.post("/auth/login", (req, res) => {
-  const payload = authLoginSchema.parse(req.body);
-  const result = store.createRegisteredSession(payload.username);
-  res.status(200).json({
-    user: result.user,
-    session: result.session
-  });
-});
-
-v1Router.post("/auth/logout", (req, res) => {
-  const payload = authLogoutSchema.parse(req.body);
-  const removed = store.deleteAuthSession(payload.access_token);
-  if (!removed) {
-    sendError(res, 404, ERROR_CODES.SESSION_NOT_FOUND, "Auth session was not found");
-    return;
+v1Router.post("/auth/guest", async (req, res) => {
+  try {
+    const payload = authGuestSchema.parse(req.body);
+    const result = await persistence.createGuest(payload.display_name);
+    res.status(201).json({
+      user: result.user,
+      session: result.session
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "create_guest_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Create guest failed", message);
   }
-  res.status(200).json({ success: true });
 });
 
-v1Router.post("/rooms", (req, res) => {
-  const payload = roomCreateSchema.parse(req.body);
-  const created = store.createRoom({
-    hostUserId: payload.host_user_id,
-    hostIdentity: payload.host_identity,
-    hostSettings: payload.host_settings,
-    providerProfile: payload.provider_profile,
-    supportedLanguages: payload.supported_languages
-  });
+v1Router.post("/auth/login", async (req, res) => {
+  try {
+    const payload = authLoginSchema.parse(req.body);
+    const result = await persistence.createRegisteredSession(payload.username);
+    res.status(200).json({
+      user: result.user,
+      session: result.session
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "login_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Login failed", message);
+  }
+});
 
-  const roomMeta = roomMetadata(created.room.sessionId, created.room.providerProfile, created.room.supportedLanguages);
-  const participantMeta = participantMetadata("host", payload.host_identity, payload.host_settings);
-  const livekitToken = createLivekitToken({
-    identity: payload.host_identity,
-    name: payload.host_display_name,
-    room: created.room.roomId,
-    metadata: participantMeta
-  });
-
-  res.status(201).json({
-    room: created.room,
-    participant: created.hostParticipant,
-    metadata: {
-      room: roomMeta,
-      participant: participantMeta
-    },
-    livekit: {
-      room_name: created.room.roomId,
-      token: livekitToken,
-      token_status: livekitToken ? "issued" : "skipped_missing_livekit_credentials"
+v1Router.post("/auth/logout", async (req, res) => {
+  try {
+    const payload = authLogoutSchema.parse(req.body);
+    const removed = await persistence.deleteAuthSession(payload.access_token);
+    if (!removed) {
+      sendError(res, 404, ERROR_CODES.SESSION_NOT_FOUND, "Auth session was not found");
+      return;
     }
-  });
+    res.status(200).json({ success: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "logout_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Logout failed", message);
+  }
+});
+
+v1Router.post("/rooms", async (req, res) => {
+  try {
+    const payload = roomCreateSchema.parse(req.body);
+    const created = await persistence.createRoom({
+      hostUserId: payload.host_user_id,
+      hostIdentity: payload.host_identity,
+      hostSettings: payload.host_settings,
+      providerProfile: payload.provider_profile,
+      supportedLanguages: payload.supported_languages
+    });
+
+    const roomMeta = roomMetadata(created.room.sessionId, created.room.providerProfile, created.room.supportedLanguages);
+    const participantMeta = participantMetadata("host", payload.host_identity, payload.host_settings);
+    const livekitToken = createLivekitToken({
+      identity: payload.host_identity,
+      name: payload.host_display_name,
+      room: created.room.roomId,
+      metadata: participantMeta
+    });
+
+    res.status(201).json({
+      room: created.room,
+      participant: created.hostParticipant,
+      metadata: {
+        room: roomMeta,
+        participant: participantMeta
+      },
+      livekit: {
+        room_name: created.room.roomId,
+        token: livekitToken,
+        token_status: livekitToken ? "issued" : "skipped_missing_livekit_credentials"
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "create_room_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Create room failed", message);
+  }
 });
 
 v1Router.post("/rooms/join", async (req, res) => {
   const payload = roomJoinSchema.parse(req.body);
   try {
-    const room = store.getRoom(payload.room_id);
+    const room = await persistence.getRoom(payload.room_id);
     if (!room) {
       sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
       return;
@@ -164,7 +184,7 @@ v1Router.post("/rooms/join", async (req, res) => {
 
     let joined;
     try {
-      joined = store.joinRoom({
+      joined = await persistence.joinRoom({
         roomId: payload.room_id,
         guestUserId: payload.guest_user_id,
         guestIdentity: payload.guest_identity,
@@ -224,7 +244,7 @@ v1Router.post("/rooms/join", async (req, res) => {
 v1Router.post("/rooms/:roomId/end", async (req, res) => {
   const roomId = z.string().min(1).parse(req.params.roomId);
   try {
-    const room = store.endRoom(roomId);
+    const room = await persistence.endRoom(roomId);
     const warnings: string[] = [];
     await stopWorkerSession(room.sessionId, "room_ended").catch((error) => {
       const message = error instanceof Error ? error.message : "worker_stop_failed";
@@ -252,12 +272,12 @@ v1Router.post("/rooms/:roomId/end", async (req, res) => {
   }
 });
 
-v1Router.patch("/rooms/:roomId/participants/:participantId/settings", (req, res) => {
+v1Router.patch("/rooms/:roomId/participants/:participantId/settings", async (req, res) => {
   const roomId = z.string().min(1).parse(req.params.roomId);
   const participantId = z.string().min(1).parse(req.params.participantId);
   const payload = patchSettingsSchema.parse(req.body);
   try {
-    const participant = store.updateParticipantSettings(roomId, participantId, payload);
+    const participant = await persistence.updateParticipantSettings(roomId, participantId, payload);
     res.status(200).json({ participant });
   } catch (error) {
     const message = error instanceof Error ? error.message : "settings_update_failed";
@@ -289,14 +309,25 @@ v1Router.post("/translate/text", (_req, res) => {
   sendError(res, 501, ERROR_CODES.NOT_IMPLEMENTED, "POST /translate/text is planned after voice-room core");
 });
 
-v1Router.post("/internal/worker/events", (req, res) => {
-  const payload = z.record(z.unknown()).parse(req.body);
-  store.appendWorkerEvent(payload);
-  res.status(202).json({ accepted: true });
+v1Router.post("/internal/worker/events", async (req, res) => {
+  try {
+    const payload = z.record(z.unknown()).parse(req.body);
+    await persistence.appendWorkerEvent(payload);
+    res.status(202).json({ accepted: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "append_worker_event_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Append worker event failed", message);
+  }
 });
 
-v1Router.get("/internal/worker/events", (_req, res) => {
-  res.status(200).json({ items: store.listWorkerEvents() });
+v1Router.get("/internal/worker/events", async (_req, res) => {
+  try {
+    const items = await persistence.listWorkerEvents();
+    res.status(200).json({ items });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "list_worker_events_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "List worker events failed", message);
+  }
 });
 
 export { v1Router };

@@ -8,4 +8,4 @@ COPY tsconfig.json ./
 COPY src ./src
 
 EXPOSE 8080
-CMD ["npm", "run", "dev"]
+CMD ["sh", "-c", "npm run migrate && npm run dev"]
