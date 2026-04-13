@@ -1,0 +1,55 @@
+services:
+  backend:
+    build:
+      context: ../backend-node
+      dockerfile: Dockerfile
+    container_name: voice_backend
+    env_file:
+      - ../backend-node/.env.example
+    ports:
+      - "8080:8080"
+    depends_on:
+      worker:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: ../worker-python
+      dockerfile: Dockerfile
+    container_name: voice_worker
+    env_file:
+      - ../worker-python/.env.example
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: voice_postgres
+    environment:
+      POSTGRES_DB: voice_translation
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - voice_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d voice_translation"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  voice_postgres_data:

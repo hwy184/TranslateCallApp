@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "voice-translation/metadata.schema.json",
+  "title": "LiveKit Metadata Contract V1",
+  "type": "object",
+  "properties": {
+    "room_metadata": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "mode",
+        "audio_mode",
+        "supported_languages",
+        "provider_profile"
+      ],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1 },
+        "mode": { "const": "bidirectional" },
+        "audio_mode": { "const": "translated_only" },
+        "supported_languages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 2
+        },
+        "provider_profile": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "participant_metadata": {
+      "type": "object",
+      "required": [
+        "role",
+        "identity",
+        "source_language",
+        "target_language",
+        "voice_profile"
+      ],
+      "properties": {
+        "role": { "type": "string", "enum": ["host", "guest", "worker"] },
+        "identity": { "type": "string", "minLength": 1 },
+        "source_language": { "type": "string", "minLength": 2 },
+        "target_language": { "type": "string", "minLength": 2 },
+        "voice_profile": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "room_metadata",
+    "participant_metadata"
+  ],
+  "additionalProperties": false
+}

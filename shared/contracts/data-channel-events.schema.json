@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "voice-translation/data-channel-events.schema.json",
+  "title": "Data Channel Events Contract V1",
+  "type": "object",
+  "required": [
+    "type",
+    "session_id",
+    "room_id",
+    "utterance_id",
+    "speaker_identity",
+    "source_lang",
+    "target_lang",
+    "timestamp"
+  ],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "subtitle.partial",
+        "subtitle.final",
+        "translation.final",
+        "session.state",
+        "participant.state",
+        "warning",
+        "error"
+      ]
+    },
+    "session_id": { "type": "string", "minLength": 1 },
+    "room_id": { "type": "string", "minLength": 1 },
+    "utterance_id": { "type": "string", "minLength": 1 },
+    "speaker_identity": { "type": "string", "minLength": 1 },
+    "source_lang": { "type": "string", "minLength": 2 },
+    "target_lang": { "type": "string", "minLength": 2 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "text": { "type": "string" },
+    "translated_text": { "type": "string" },
+    "details": { "type": "object" }
+  },
+  "additionalProperties": true
+}

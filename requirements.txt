@@ -4,7 +4,7 @@ livekit-plugins-openai
 livekit-plugins-silero
 
 # LLM & Transcription
-whisper
+openai-whisper
 openai
 httpx
 
