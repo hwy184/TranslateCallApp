@@ -1,0 +1,35 @@
+import type { Response } from "express";
+
+export const ERROR_CODES = {
+  VALIDATION_ERROR: "VALIDATION_ERROR",
+  INTERNAL_ERROR: "INTERNAL_ERROR",
+  NOT_IMPLEMENTED: "NOT_IMPLEMENTED",
+  SESSION_NOT_FOUND: "SESSION_NOT_FOUND",
+  ROOM_NOT_FOUND: "ROOM_NOT_FOUND",
+  ROOM_ENDED: "ROOM_ENDED",
+  ROOM_ALREADY_HAS_GUEST: "ROOM_ALREADY_HAS_GUEST",
+  PARTICIPANT_NOT_FOUND: "PARTICIPANT_NOT_FOUND",
+  WORKER_START_FAILED: "WORKER_START_FAILED",
+  WORKER_STOP_FAILED: "WORKER_STOP_FAILED",
+  JOIN_FAILED: "JOIN_FAILED",
+  ROOM_END_FAILED: "ROOM_END_FAILED",
+  SETTINGS_UPDATE_FAILED: "SETTINGS_UPDATE_FAILED"
+} as const;
+
+export type ApiErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
+
+export function sendError(
+  res: Response,
+  status: number,
+  code: ApiErrorCode,
+  message: string,
+  details?: unknown
+) {
+  res.status(status).json({
+    error: {
+      code,
+      message,
+      details: details ?? null
+    }
+  });
+}
