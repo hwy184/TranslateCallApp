@@ -6,6 +6,8 @@ services:
     container_name: voice_backend
     env_file:
       - ../backend-node/.env.example
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/voice_translation
     ports:
       - "8080:8080"
     depends_on:

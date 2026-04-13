@@ -22,3 +22,9 @@ Dat khung ky thuat de trien khai cac task sau theo `readme/plan.md`:
 - Chua implement nghiep vu auth/room/history/settings.
 - Chua tich hop LiveKit token va DB.
 - Chua chay E2E test vi la skeleton phase.
+
+## Review fixes (sau feedback)
+
+- Backend bo route `/internal/worker/sessions/start` va `/internal/worker/sessions/{sessionId}/stop`.
+- Schema data-channel bo `required` cung cho moi event, doi sang rang buoc theo `type` bang `if/then`.
+- Docker compose override `DATABASE_URL` backend ve host `postgres` trong network container.

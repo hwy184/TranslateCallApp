@@ -51,14 +51,6 @@ v1Router.post("/translate/text", (_req, res) => {
   res.status(501).json(notImplemented("POST /translate/text"));
 });
 
-v1Router.post("/internal/worker/sessions/start", (_req, res) => {
-  res.status(501).json(notImplemented("POST /internal/worker/sessions/start"));
-});
-
-v1Router.post("/internal/worker/sessions/:sessionId/stop", (_req, res) => {
-  res.status(501).json(notImplemented("POST /internal/worker/sessions/{sessionId}/stop"));
-});
-
 v1Router.post("/internal/worker/events", (_req, res) => {
   res.status(501).json(notImplemented("POST /internal/worker/events"));
 });

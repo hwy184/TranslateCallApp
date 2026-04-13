@@ -7,10 +7,6 @@
     "type",
     "session_id",
     "room_id",
-    "utterance_id",
-    "speaker_identity",
-    "source_lang",
-    "target_lang",
     "timestamp"
   ],
   "properties": {
@@ -37,5 +33,40 @@
     "translated_text": { "type": "string" },
     "details": { "type": "object" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "subtitle.partial",
+              "subtitle.final",
+              "translation.final"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "utterance_id",
+          "speaker_identity",
+          "source_lang",
+          "target_lang"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": { "const": "translation.final" }
+        }
+      },
+      "then": {
+        "required": [
+          "translated_text"
+        ]
+      }
+    }
+  ],
   "additionalProperties": true
 }
