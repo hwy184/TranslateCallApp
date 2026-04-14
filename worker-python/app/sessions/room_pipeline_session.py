@@ -90,12 +90,20 @@ class RoomPipelineSession:
     async def process_utterance(self, request: SimulateUtteranceRequest) -> list[SessionEvent]:
         self.updated_at = utc_now_iso()
         utterance_id = request.utterance_id or f"utt_{uuid4()}"
-        resolved_target_identity = self._resolve_target_identity(request.speaker_identity, request.target_identity)
         speaker_profile = self.participant_by_identity.get(request.speaker_identity, {})
-        target_profile = self.participant_by_identity.get(resolved_target_identity, {})
-
         resolved_source_lang = request.source_lang or speaker_profile.get("source_language") or "vi"
-        resolved_target_lang = request.target_lang or target_profile.get("target_language") or ("en" if resolved_source_lang == "vi" else "vi")
+        resolved_target_identity = self._resolve_target_identity(
+            request.speaker_identity,
+            request.target_identity,
+            resolved_source_lang,
+        )
+        target_profile = self.participant_by_identity.get(resolved_target_identity, {})
+        resolved_target_lang = (
+            request.target_lang
+            or speaker_profile.get("target_language")
+            or target_profile.get("source_language")
+            or ("en" if resolved_source_lang == "vi" else "vi")
+        )
         resolved_voice_profile = request.voice_profile or target_profile.get("voice_profile") or "default"
 
         key = (request.speaker_identity, resolved_target_identity)
@@ -108,7 +116,16 @@ class RoomPipelineSession:
                 providers=self.provider_bundle.stt_chain,
                 invoke=lambda provider: provider.transcribe(request.text, resolved_source_lang),
             )
-            result_events.extend(self._warning_events(stt_warnings, utterance_id, request))
+            result_events.extend(
+                self._warning_events(
+                    warnings=stt_warnings,
+                    utterance_id=utterance_id,
+                    speaker_identity=request.speaker_identity,
+                    source_lang=resolved_source_lang,
+                    target_lang=resolved_target_lang,
+                    target_identity=resolved_target_identity,
+                )
+            )
 
             subtitle_event = SessionEvent(
                 type="subtitle.final",
@@ -135,7 +152,16 @@ class RoomPipelineSession:
                     list(context),
                 ),
             )
-            result_events.extend(self._warning_events(translate_warnings, utterance_id, request))
+            result_events.extend(
+                self._warning_events(
+                    warnings=translate_warnings,
+                    utterance_id=utterance_id,
+                    speaker_identity=request.speaker_identity,
+                    source_lang=resolved_source_lang,
+                    target_lang=resolved_target_lang,
+                    target_identity=resolved_target_identity,
+                )
+            )
 
             translation_details: dict[str, str | None] = {
                 "translate_provider": translation_result.provider,
@@ -168,14 +194,35 @@ class RoomPipelineSession:
                 )
                 translation_details["tts_provider"] = tts_result.provider
                 translation_details["audio_ref"] = tts_result.audio_ref
-                result_events.extend(self._warning_events(tts_warnings, utterance_id, request))
-            except FallbackExhaustedError as exhausted:
-                result_events.extend(self._warning_events(exhausted.warnings, utterance_id, request))
                 result_events.extend(
                     self._warning_events(
-                        [{"provider": "tts_chain", "error": str(exhausted)}],
-                        utterance_id,
-                        request,
+                        warnings=tts_warnings,
+                        utterance_id=utterance_id,
+                        speaker_identity=request.speaker_identity,
+                        source_lang=resolved_source_lang,
+                        target_lang=resolved_target_lang,
+                        target_identity=resolved_target_identity,
+                    )
+                )
+            except FallbackExhaustedError as exhausted:
+                result_events.extend(
+                    self._warning_events(
+                        warnings=exhausted.warnings,
+                        utterance_id=utterance_id,
+                        speaker_identity=request.speaker_identity,
+                        source_lang=resolved_source_lang,
+                        target_lang=resolved_target_lang,
+                        target_identity=resolved_target_identity,
+                    )
+                )
+                result_events.extend(
+                    self._warning_events(
+                        warnings=[{"provider": "tts_chain", "error": str(exhausted)}],
+                        utterance_id=utterance_id,
+                        speaker_identity=request.speaker_identity,
+                        source_lang=resolved_source_lang,
+                        target_lang=resolved_target_lang,
+                        target_identity=resolved_target_identity,
                     )
                 )
 
@@ -187,7 +234,16 @@ class RoomPipelineSession:
             )
             return result_events
         except FallbackExhaustedError as exhausted:
-            result_events.extend(self._warning_events(exhausted.warnings, utterance_id, request))
+            result_events.extend(
+                self._warning_events(
+                    warnings=exhausted.warnings,
+                    utterance_id=utterance_id,
+                    speaker_identity=request.speaker_identity,
+                    source_lang=resolved_source_lang,
+                    target_lang=resolved_target_lang,
+                    target_identity=resolved_target_identity,
+                )
+            )
             error_event = SessionEvent(
                 type="error",
                 session_id=self.session_id,
@@ -222,7 +278,10 @@ class RoomPipelineSession:
         self,
         warnings: list[dict[str, str]],
         utterance_id: str,
-        request: SimulateUtteranceRequest,
+        speaker_identity: str,
+        source_lang: str,
+        target_lang: str,
+        target_identity: str,
     ) -> list[SessionEvent]:
         events: list[SessionEvent] = []
         for warning in warnings:
@@ -231,23 +290,36 @@ class RoomPipelineSession:
                 session_id=self.session_id,
                 room_id=self.room_id,
                 utterance_id=utterance_id,
-                speaker_identity=request.speaker_identity,
-                source_lang=request.source_lang or "vi",
-                target_lang=request.target_lang or "en",
+                speaker_identity=speaker_identity,
+                source_lang=source_lang,
+                target_lang=target_lang,
                 timestamp=utc_now_iso(),
                 details={
                     **warning,
-                    "target_identity": request.target_identity or self._resolve_target_identity(request.speaker_identity, request.target_identity),
+                    "target_identity": target_identity,
                 },
             )
             self.events.append(event)
             events.append(event)
         return events
 
-    def _resolve_target_identity(self, speaker_identity: str, target_identity: str | None) -> str:
+    def _resolve_target_identity(self, speaker_identity: str, target_identity: str | None, source_lang: str) -> str:
         if target_identity:
             return target_identity
-        for identity in self.participant_by_identity:
-            if identity != speaker_identity:
+
+        if speaker_identity in self.participant_by_identity:
+            for identity in self.participant_by_identity:
+                if identity != speaker_identity:
+                    return identity
+            return "listener_unknown"
+
+        # Fallback when speaker identity is unknown:
+        # choose participant whose source language differs from current speaker source.
+        for identity, participant in self.participant_by_identity.items():
+            participant_source_lang = participant.get("source_language")
+            if participant_source_lang and participant_source_lang != source_lang:
                 return identity
+
+        for identity in self.participant_by_identity:
+            return identity
         return "listener_unknown"

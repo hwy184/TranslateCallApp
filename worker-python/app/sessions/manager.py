@@ -42,7 +42,7 @@ class SessionManager:
 
         if self._on_session_start is not None:
             await self._on_session_start(session)
-        await self._emit(session.list_events()[-1:])
+        await self._emit(session.list_events())
         return state
 
     async def stop_session(self, session_id: str) -> SessionState | None:
@@ -71,7 +71,13 @@ class SessionManager:
                 return None
             return self._to_state(session)
 
-    async def simulate_utterance(self, session_id: str, payload: SimulateUtteranceRequest):
+    async def simulate_utterance(
+        self,
+        session_id: str,
+        payload: SimulateUtteranceRequest,
+        *,
+        blocking_emit: bool = False,
+    ):
         async with self._lock:
             session = self._sessions.get(session_id)
             if session is None:
@@ -80,7 +86,10 @@ class SessionManager:
                 return session, []
 
         events = await session.process_utterance(payload)
-        await self._emit(events)
+        if blocking_emit and self._event_sink is not None and events:
+            await self._event_sink(events)
+        else:
+            await self._emit(events)
         return session, events
 
     async def list_session_events(self, session_id: str):
