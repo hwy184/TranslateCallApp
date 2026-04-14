@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Voice Translation",
+    "slug": "voice-translation-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "jsEngine": "hermes",
+    "plugins": [
+      "@livekit/react-native"
+    ],
+    "android": {
+      "package": "com.voice.translation.mobile",
+      "permissions": [
+        "RECORD_AUDIO",
+        "MODIFY_AUDIO_SETTINGS",
+        "BLUETOOTH",
+        "BLUETOOTH_CONNECT"
+      ]
+    }
+  }
+}
