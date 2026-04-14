@@ -29,7 +29,11 @@ def build_router(session_manager: SessionManager) -> APIRouter:
 
     @router.post("/internal/sessions/{session_id}/simulate-utterance")
     async def simulate_utterance(session_id: str, payload: SimulateUtteranceRequest):
-        session, events = await session_manager.simulate_utterance(session_id, payload)
+        session, events = await session_manager.simulate_utterance(
+            session_id,
+            payload,
+            blocking_emit=True,
+        )
         if session is None:
             raise HTTPException(status_code=404, detail="session_not_found")
 

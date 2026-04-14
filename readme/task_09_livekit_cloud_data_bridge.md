@@ -10,6 +10,9 @@ Nang cap LiveKit bridge tu hook scaffold thanh che do room-connect that cho Live
   - Tao JWT worker identity tu `LIVEKIT_API_KEY/SECRET`
   - Join room hidden participant qua `livekit.rtc.Room.connect`
   - Luu session -> room context de publish event
+  - Tao/publish translated audio output tracks theo target identity:
+    - `translated_to_<participant_identity>`
+  - Subscribe remote audio tracks (`track_subscribed`) va bat audio observer loop
   - Disconnect room khi stop session/shutdown
   - File: `worker-python/app/services/livekit_bridge.py`
 
@@ -17,6 +20,7 @@ Nang cap LiveKit bridge tu hook scaffold thanh che do room-connect that cho Live
   - Day du target_identity trong event details de co the route destination identity
   - LiveKit bridge publish event payload len data channel topic `translation.events`
   - Co `destination_identities` neu event co `details.target_identity`
+  - `translation.final` co audio publish path vao translated track (hien tai tone placeholder)
   - File: `worker-python/app/sessions/room_pipeline_session.py`
 
 - Session lifecycle cleanup:
@@ -36,5 +40,8 @@ Nang cap LiveKit bridge tu hook scaffold thanh che do room-connect that cho Live
 
 ## Ghi chu
 
-- Task nay tap trung data-channel bridge + room join lifecycle.
-- Media audio track subscribe/publish (RTP audio collector + translated audio track) se tiep tuc o buoc media-plane integration tiep theo.
+- Task nay da kich hoat media-plane path nen:
+  - join room + data channel publish
+  - translated audio track publish (placeholder tone)
+  - remote audio subscribe observer
+- Buoc tiep theo: thay placeholder tone bang PCM TTS output thuc te va noi STT-from-audio collector.
