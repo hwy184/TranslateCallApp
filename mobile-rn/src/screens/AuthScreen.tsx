@@ -2,6 +2,8 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -61,87 +63,124 @@ export function AuthScreen({ navigation }: Props) {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.heading}>Voice Translation V1</Text>
-      <Text style={styles.sub}>
-        Mot app cho 2 may. Host tao room, Guest join room, AI worker dich realtime.
-      </Text>
+    <KeyboardAvoidingView
+      style={styles.screen}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <ScrollView contentContainerStyle={styles.container}>
+        <View style={styles.hero}>
+          <Text style={styles.brand}>LINGUA</Text>
+          <Text style={styles.tagline}>Ket noi moi ngon ngu</Text>
+          <Text style={styles.sub}>
+            Dang nhap nhanh de tao phong hoac tham gia voice room realtime.
+          </Text>
+        </View>
 
-      <SectionCard title="Backend Endpoint">
-        <TextInput
-          style={styles.input}
-          value={apiBaseUrl}
-          onChangeText={setApiBaseUrl}
-          autoCapitalize="none"
-          placeholder="http://192.168.x.y:8080"
-          placeholderTextColor={palette.muted}
-        />
-        <Text style={styles.hint}>Can dung IP LAN neu test tren 2 may that.</Text>
-      </SectionCard>
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Cau hinh ket noi</Text>
+          <TextInput
+            style={styles.input}
+            value={apiBaseUrl}
+            onChangeText={setApiBaseUrl}
+            autoCapitalize="none"
+            placeholder="http://192.168.x.y:8080"
+            placeholderTextColor={palette.muted}
+          />
+          <TextInput
+            style={styles.input}
+            value={livekitUrl}
+            onChangeText={setLivekitUrl}
+            autoCapitalize="none"
+            placeholder="wss://xxxx.livekit.cloud"
+            placeholderTextColor={palette.muted}
+          />
+          <Text style={styles.hint}>Dung IP LAN neu test tren 2 may that.</Text>
+        </View>
 
-      <SectionCard title="LiveKit URL">
-        <TextInput
-          style={styles.input}
-          value={livekitUrl}
-          onChangeText={setLivekitUrl}
-          autoCapitalize="none"
-          placeholder="wss://xxxx.livekit.cloud"
-          placeholderTextColor={palette.muted}
-        />
-      </SectionCard>
+        <SectionCard title="Guest Quick Start">
+          <TextInput
+            style={styles.input}
+            value={guestName}
+            onChangeText={setGuestName}
+            placeholder="Guest display name"
+            placeholderTextColor={palette.muted}
+          />
+          <Pressable style={styles.primaryBtn} onPress={runGuest} disabled={loading !== null}>
+            {loading === "guest" ? (
+              <ActivityIndicator color="#001015" />
+            ) : (
+              <Text style={styles.primaryText}>Continue as Guest</Text>
+            )}
+          </Pressable>
+        </SectionCard>
 
-      <SectionCard title="Guest Quick Start">
-        <TextInput
-          style={styles.input}
-          value={guestName}
-          onChangeText={setGuestName}
-          placeholder="Guest display name"
-          placeholderTextColor={palette.muted}
-        />
-        <Pressable style={styles.primaryBtn} onPress={runGuest} disabled={loading !== null}>
-          {loading === "guest" ? (
-            <ActivityIndicator color="#001015" />
-          ) : (
-            <Text style={styles.primaryText}>Continue as Guest</Text>
-          )}
-        </Pressable>
-      </SectionCard>
+        <SectionCard title="Registered Login (username)">
+          <TextInput
+            style={styles.input}
+            value={username}
+            onChangeText={setUsername}
+            autoCapitalize="none"
+            placeholder="username"
+            placeholderTextColor={palette.muted}
+          />
+          <Pressable style={styles.secondaryBtn} onPress={runLogin} disabled={loading !== null}>
+            {loading === "login" ? (
+              <ActivityIndicator color={palette.text} />
+            ) : (
+              <Text style={styles.secondaryText}>Login Registered</Text>
+            )}
+          </Pressable>
+        </SectionCard>
 
-      <SectionCard title="Registered Login (username)">
-        <TextInput
-          style={styles.input}
-          value={username}
-          onChangeText={setUsername}
-          autoCapitalize="none"
-          placeholder="username"
-          placeholderTextColor={palette.muted}
-        />
-        <Pressable style={styles.secondaryBtn} onPress={runLogin} disabled={loading !== null}>
-          {loading === "login" ? (
-            <ActivityIndicator color={palette.text} />
-          ) : (
-            <Text style={styles.secondaryText}>Login Registered</Text>
-          )}
-        </Pressable>
-      </SectionCard>
-
-      {!!error && <Text style={styles.error}>{error}</Text>}
-    </ScrollView>
+        {!!error && <Text style={styles.error}>{error}</Text>}
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: "#21405E"
+  },
   container: {
     padding: 16,
-    gap: 14
+    gap: 14,
+    backgroundColor: "transparent"
   },
-  heading: {
+  hero: {
+    borderRadius: 18,
+    padding: 18,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)"
+  },
+  brand: {
+    color: "#FFFFFF",
+    fontSize: 30,
+    fontWeight: "900",
+    letterSpacing: 1.5
+  },
+  tagline: {
+    color: "rgba(255,255,255,0.95)",
+    marginTop: 4,
+    fontWeight: "700"
+  },
+  card: {
+    backgroundColor: "rgba(7,20,34,0.85)",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: palette.border,
+    padding: 14,
+    gap: 10
+  },
+  cardTitle: {
     color: palette.text,
-    fontSize: 26,
-    fontWeight: "800"
+    fontWeight: "700"
   },
   sub: {
-    color: palette.muted
+    color: "rgba(255,255,255,0.8)",
+    marginTop: 6
   },
   hint: {
     color: palette.muted,
@@ -177,7 +216,11 @@ const styles = StyleSheet.create({
     fontWeight: "800"
   },
   error: {
-    color: palette.danger,
-    fontWeight: "600"
+    color: "#FFE9E9",
+    fontWeight: "700",
+    backgroundColor: "rgba(155,34,34,0.9)",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10
   }
 });

@@ -184,6 +184,24 @@ export const persistence = {
     return mapRoom(result.rows[0]);
   },
 
+  async getRoomByShortCode(shortCode: string): Promise<Room | undefined> {
+    const normalized = shortCode.trim().toLowerCase();
+    const result = await pool.query(
+      `
+        SELECT room_id, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+        FROM rooms
+        WHERE RIGHT(room_id, $1) = $2 AND status <> 'ended'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [normalized.length, normalized]
+    );
+    if ((result.rowCount ?? 0) === 0) {
+      return undefined;
+    }
+    return mapRoom(result.rows[0]);
+  },
+
   async joinRoom(input: {
     roomId: string;
     guestUserId: string;

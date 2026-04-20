@@ -100,8 +100,8 @@ class RoomPipelineSession:
         target_profile = self.participant_by_identity.get(resolved_target_identity, {})
         resolved_target_lang = (
             request.target_lang
-            or speaker_profile.get("target_language")
             or target_profile.get("source_language")
+            or speaker_profile.get("target_language")
             or ("en" if resolved_source_lang == "vi" else "vi")
         )
         resolved_voice_profile = request.voice_profile or target_profile.get("voice_profile") or "default"

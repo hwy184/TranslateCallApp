@@ -9,6 +9,8 @@ cd mobile-rn
 npm install
 ```
 
+`npm install` se tu dong setup Android env local (JDK/SDK path) cho may hien tai.
+
 ## 2) Env
 
 Dat env khi chay:
@@ -30,6 +32,8 @@ set EXPO_PUBLIC_API_BASE_URL=http://192.168.x.y:8080
 npm run android
 npm run start
 ```
+
+Neu qua may moi, quy trinh van nhu tren: chi can `npm install` roi `npm run android`.
 
 Mo app tren 2 thiet bi:
 - May A: tao room (Host)

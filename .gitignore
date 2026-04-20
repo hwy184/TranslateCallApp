@@ -11,6 +11,7 @@ textOutput/
 
 # dependencies
 mobile-rn/node_modules/
+backend-node/node_modules/
 
 # Expo / React Native
 mobile-rn/.expo/

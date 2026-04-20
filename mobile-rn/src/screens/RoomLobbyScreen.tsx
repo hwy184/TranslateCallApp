@@ -111,8 +111,9 @@ export function RoomLobbyScreen({ navigation }: Props) {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <SectionCard title="Current User">
+    <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
+      <View style={styles.headerCard}>
+        <Text style={styles.headerTitle}>Voice Room Lobby</Text>
         <Text style={styles.text}>
           {user.displayName} ({user.type})
         </Text>
@@ -134,7 +135,7 @@ export function RoomLobbyScreen({ navigation }: Props) {
             <Text style={[styles.ghostText, { color: palette.danger }]}>Logout</Text>
           </Pressable>
         </View>
-      </SectionCard>
+      </View>
 
       <SectionCard title="Host Flow (Create Room)">
         <TextInput
@@ -144,7 +145,7 @@ export function RoomLobbyScreen({ navigation }: Props) {
           placeholder="Host display name"
           placeholderTextColor={palette.muted}
         />
-        <Text style={styles.muted}>Language: VI -> EN (fixed in v1 in-call).</Text>
+        <Text style={styles.muted}>Language: VI to EN (fixed in v1 in-call).</Text>
         <Pressable style={styles.primaryBtn} onPress={onCreate} disabled={loading !== null}>
           {loading === "create" ? (
             <ActivityIndicator color="#041C14" />
@@ -170,7 +171,7 @@ export function RoomLobbyScreen({ navigation }: Props) {
           placeholder="room_xxx"
           placeholderTextColor={palette.muted}
         />
-        <Text style={styles.muted}>Language: EN -> VI (fixed in v1 in-call).</Text>
+        <Text style={styles.muted}>Language: EN to VI (fixed in v1 in-call).</Text>
         <Pressable
           style={styles.secondaryBtn}
           onPress={onJoin}
@@ -191,9 +192,26 @@ export function RoomLobbyScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: "#1E3A57"
+  },
   container: {
     padding: 16,
     gap: 12
+  },
+  headerCard: {
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    padding: 14,
+    gap: 6
+  },
+  headerTitle: {
+    color: "#FFFFFF",
+    fontSize: 20,
+    fontWeight: "800"
   },
   row: {
     flexDirection: "row",

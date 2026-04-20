@@ -14,6 +14,15 @@ function hasString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function hasUtteranceFields(value: Record<string, unknown>): boolean {
+  return (
+    hasString(value.utterance_id) &&
+    hasString(value.speaker_identity) &&
+    hasString(value.source_lang) &&
+    hasString(value.target_lang)
+  );
+}
+
 export function parseDataChannelEvent(input: string): DataChannelEventV1 | null {
   let parsed: unknown;
   try {
@@ -30,11 +39,18 @@ export function parseDataChannelEvent(input: string): DataChannelEventV1 | null 
     return null;
   }
 
-  if (value.type === "translation.final" && !hasString(value.translated_text)) {
-    return null;
+  if (
+    value.type === "subtitle.partial" ||
+    value.type === "subtitle.final" ||
+    value.type === "translation.final"
+  ) {
+    if (!hasUtteranceFields(value)) return null;
+    if (value.type === "translation.final" && !hasString(value.translated_text)) {
+      return null;
+    }
   }
 
-  return value as DataChannelEventV1;
+  return value as unknown as DataChannelEventV1;
 }
 
 export interface TimelineEvent {
@@ -49,8 +65,9 @@ export interface TimelineEvent {
 }
 
 export function toTimelineEvent(event: DataChannelEventV1): TimelineEvent {
+  const utteranceId = "utterance_id" in event ? event.utterance_id : undefined;
   return {
-    id: `${event.type}:${event.timestamp}:${event.utterance_id ?? "system"}`,
+    id: `${event.type}:${event.timestamp}:${utteranceId ?? "system"}`,
     type: event.type,
     speakerIdentity: "speaker_identity" in event ? event.speaker_identity : undefined,
     sourceLang: "source_lang" in event ? event.source_lang : undefined,
