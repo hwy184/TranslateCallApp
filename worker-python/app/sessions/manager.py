@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from .models import SessionState, StartSessionRequest, SimulateUtteranceRequest
 from .room_pipeline_session import RoomPipelineSession
+from ..config.settings import get_settings
 from ..providers.registry import ProviderRegistry
 from .models import SessionEvent
 
@@ -14,7 +15,7 @@ class SessionManager:
         on_session_stop: Callable[[RoomPipelineSession], Awaitable[None]] | None = None,
     ) -> None:
         self._lock = asyncio.Lock()
-        self._registry = ProviderRegistry()
+        self._registry = ProviderRegistry(get_settings())
         self._sessions: dict[str, RoomPipelineSession] = {}
         self._event_sink = event_sink
         self._on_session_start = on_session_start

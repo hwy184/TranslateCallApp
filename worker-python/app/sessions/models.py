@@ -9,7 +9,7 @@ def utc_now_iso() -> str:
 class StartSessionRequest(BaseModel):
     session_id: str = Field(min_length=1)
     room_id: str = Field(min_length=1)
-    provider_profile: str = Field(default="silero+google_stt+openai_translate+google_tts")
+    provider_profile: str = Field(default="gemini-first")
     context_window: int = Field(default=5, ge=3, le=10)
     room_metadata: dict[str, object] | None = None
     participants: list[dict[str, str]] = Field(default_factory=list)

@@ -3,6 +3,7 @@ import asyncio
 from .api.routes import build_router
 from .config.settings import get_settings
 from .sessions.manager import SessionManager
+from .sessions.models import SimulateUtteranceRequest
 from .services.backend_events import BackendEventsClient
 from .services.livekit_bridge import LiveKitBridge
 
@@ -25,6 +26,12 @@ def create_app() -> FastAPI:
         on_session_start=livekit_bridge.start_session,
         on_session_stop=livekit_bridge.stop_session,
     )
+
+    async def handle_livekit_utterance(session_id: str, payload: SimulateUtteranceRequest) -> None:
+        await manager.simulate_utterance(session_id, payload, blocking_emit=True)
+
+    livekit_bridge.set_utterance_handler(handle_livekit_utterance)
+
     app.include_router(build_router(manager))
 
     @app.on_event("shutdown")

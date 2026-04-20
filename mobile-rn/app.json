@@ -6,10 +6,11 @@
     "orientation": "portrait",
     "jsEngine": "hermes",
     "plugins": [
-      "@livekit/react-native"
+      "@livekit/react-native-expo-plugin"
     ],
     "android": {
       "package": "com.voice.translation.mobile",
+      "minSdkVersion": 24,
       "permissions": [
         "RECORD_AUDIO",
         "MODIFY_AUDIO_SETTINGS",

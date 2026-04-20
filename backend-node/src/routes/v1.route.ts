@@ -19,7 +19,7 @@ const roomCreateSchema = z.object({
   host_user_id: z.string().min(1),
   host_identity: z.string().min(1),
   host_display_name: z.string().min(1),
-  provider_profile: z.string().min(1).default("silero+google_stt+openai_translate+google_tts"),
+  provider_profile: z.string().min(1).default("gemini-first"),
   supported_languages: z.array(z.string().min(2)).min(2).default(["vi", "en"]),
   host_settings: defaultSettingsSchema.default({
     source_language: "vi",
@@ -135,6 +135,10 @@ function roomMetadata(sessionId: string, providerProfile: string, supportedLangu
   };
 }
 
+function roomShortCode(roomId: string): string {
+  return roomId.replace(/^room_/, "").slice(-8);
+}
+
 v1Router.post("/auth/guest", async (req, res) => {
   try {
     const payload = authGuestSchema.parse(req.body);
@@ -200,6 +204,7 @@ v1Router.post("/rooms", async (req, res) => {
 
     res.status(201).json({
       room: created.room,
+      room_short_code: roomShortCode(created.room.roomId),
       participant: created.hostParticipant,
       metadata: {
         room: roomMeta,
@@ -297,6 +302,7 @@ v1Router.post("/rooms/join", async (req, res) => {
 
     res.status(200).json({
       room: joined.room,
+      room_short_code: roomShortCode(joined.room.roomId),
       participant: joined.guestParticipant,
       metadata: {
         room: roomMeta,
@@ -329,6 +335,42 @@ v1Router.post("/rooms/join", async (req, res) => {
       return;
     }
     sendError(res, 500, ERROR_CODES.JOIN_FAILED, "Join room failed", message);
+  }
+});
+
+v1Router.get("/rooms/resolve/:shortCode", async (req, res) => {
+  const shortCode = z.string().min(4).max(32).parse(req.params.shortCode);
+  try {
+    const room = await persistence.getRoomByShortCode(shortCode);
+    if (!room) {
+      sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
+      return;
+    }
+    res.status(200).json({
+      room,
+      room_short_code: roomShortCode(room.roomId)
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "resolve_room_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Resolve room failed", message);
+  }
+});
+
+v1Router.get("/rooms/:roomId/status", async (req, res) => {
+  const roomId = z.string().min(1).parse(req.params.roomId);
+  try {
+    const room = await persistence.getRoom(roomId);
+    if (!room) {
+      sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
+      return;
+    }
+    res.status(200).json({
+      room,
+      room_short_code: roomShortCode(room.roomId)
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "room_status_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Room status failed", message);
   }
 });
 
