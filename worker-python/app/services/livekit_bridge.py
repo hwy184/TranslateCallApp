@@ -12,6 +12,7 @@ import wave
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+import av
 import httpx
 import numpy as np
 
@@ -48,6 +49,7 @@ class LiveKitRoomContext:
     output_sources: dict[str, object]
     output_tracks: dict[str, object]
     audio_tasks: set[asyncio.Task[None]]
+    consumed_track_ids: set[str]
     last_stt_at_by_speaker: dict[str, float]
     last_transcript_by_speaker: dict[str, tuple[str, float]]
 
@@ -76,6 +78,8 @@ class LiveKitBridge:
         self._stt_max_segment_ms = settings.stt_max_segment_ms
         self._stt_min_request_interval_ms = settings.stt_min_request_interval_ms
         self._stt_duplicate_suppress_window_ms = settings.stt_duplicate_suppress_window_ms
+        self._stt_force_segment_peak_rms = settings.stt_force_segment_peak_rms
+        self._stt_force_segment_min_voiced_ms = settings.stt_force_segment_min_voiced_ms
         self._edge_tts_voice_default = settings.edge_tts_voice_default
         self._edge_tts_rate = settings.edge_tts_rate
         self._local_stt_enabled = settings.local_stt_enabled
@@ -83,8 +87,12 @@ class LiveKitBridge:
         self._local_stt_compute_type = settings.local_stt_compute_type
         self._local_stt_device = settings.local_stt_device
         self._local_whisper_model: object | None = None
+        self._gemini_stt_blocked_until: float = 0.0
+        self._gemini_tts_blocked_until: float = 0.0
 
         self._utterance_handler: Callable[[str, SimulateUtteranceRequest], Awaitable[None]] | None = None
+        if self._local_stt_enabled and WhisperModel is None:
+            logger.warning("livekit_bridge_local_stt_unavailable_missing_dependency")
 
     def set_utterance_handler(
         self,
@@ -131,6 +139,7 @@ class LiveKitBridge:
             output_sources={},
             output_tracks={},
             audio_tasks=set(),
+            consumed_track_ids=set(),
             last_stt_at_by_speaker={},
             last_transcript_by_speaker={},
         )
@@ -148,14 +157,66 @@ class LiveKitBridge:
                 if rtc is None or not isinstance(track, rtc.RemoteAudioTrack):
                     return
                 participant_identity = getattr(participant, "identity", "unknown")
-                task = asyncio.create_task(self._consume_remote_audio(context, participant_identity, track))
-                context.audio_tasks.add(task)
-                task.add_done_callback(context.audio_tasks.discard)
+                self._start_remote_audio_consumer(context, participant_identity, track)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "livekit_bridge_track_subscribe_hook_failed",
                     extra={"session_id": session.session_id, "error": str(exc)},
                 )
+
+        @room.on("track_published")
+        def _on_track_published(publication, participant):
+            try:
+                participant_identity = getattr(participant, "identity", "unknown")
+                logger.info(
+                    "livekit_bridge_track_published session=%s participant=%s kind=%s name=%s",
+                    context.session_id,
+                    participant_identity,
+                    getattr(publication, "kind", ""),
+                    getattr(publication, "name", "") or getattr(publication, "track_name", ""),
+                )
+                if hasattr(publication, "set_subscribed"):
+                    publication.set_subscribed(True)
+                track = getattr(publication, "track", None)
+                if rtc is not None and isinstance(track, rtc.RemoteAudioTrack):
+                    self._start_remote_audio_consumer(context, participant_identity, track)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "livekit_bridge_track_published_hook_failed session=%s error=%s",
+                    context.session_id,
+                    str(exc),
+                )
+
+        @room.on("participant_connected")
+        def _on_participant_connected(participant):
+            try:
+                logger.info(
+                    "livekit_bridge_participant_connected session=%s participant=%s",
+                    context.session_id,
+                    getattr(participant, "identity", "unknown"),
+                )
+                self._scan_remote_participant_audio(context, participant)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "livekit_bridge_participant_connected_hook_failed session=%s error=%s",
+                    context.session_id,
+                    str(exc),
+                )
+
+        @room.on("track_subscription_failed")
+        def _on_track_subscription_failed(participant, track_sid, error):
+            logger.warning(
+                "livekit_bridge_track_subscription_failed session=%s participant=%s track=%s error=%s",
+                context.session_id,
+                getattr(participant, "identity", "unknown"),
+                track_sid,
+                error,
+            )
+
+        self._start_existing_remote_audio_consumers(context)
+        scan_task = asyncio.create_task(self._delayed_existing_track_scans(context))
+        context.audio_tasks.add(scan_task)
+        scan_task.add_done_callback(context.audio_tasks.discard)
 
         logger.info(
             "livekit_bridge_tracks_ready",
@@ -169,6 +230,73 @@ class LiveKitBridge:
                 "worker_identity": worker_identity,
             },
         )
+
+    def _start_existing_remote_audio_consumers(self, context: LiveKitRoomContext) -> None:
+        if rtc is None:
+            return
+        remote_participants = getattr(context.room, "remote_participants", {}) or {}
+        for participant in remote_participants.values():
+            self._scan_remote_participant_audio(context, participant)
+
+    def _scan_remote_participant_audio(self, context: LiveKitRoomContext, participant: object) -> None:
+        if rtc is None:
+            return
+        participant_identity = getattr(participant, "identity", "unknown")
+        publications = getattr(participant, "track_publications", {}) or {}
+        logger.info(
+            "livekit_bridge_scan_participant session=%s participant=%s publications=%s",
+            context.session_id,
+            participant_identity,
+            len(publications),
+        )
+        for publication in publications.values():
+            try:
+                if hasattr(publication, "set_subscribed"):
+                    publication.set_subscribed(True)
+                track = getattr(publication, "track", None)
+                if isinstance(track, rtc.RemoteAudioTrack):
+                    self._start_remote_audio_consumer(context, participant_identity, track)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "livekit_bridge_existing_track_scan_failed session=%s participant=%s error=%s",
+                    context.session_id,
+                    participant_identity,
+                    str(exc),
+                )
+
+    async def _delayed_existing_track_scans(self, context: LiveKitRoomContext) -> None:
+        try:
+            for delay in (0.5, 2.0, 5.0):
+                await asyncio.sleep(delay)
+                self._start_existing_remote_audio_consumers(context)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "livekit_bridge_delayed_track_scan_failed session=%s error=%s",
+                context.session_id,
+                str(exc),
+            )
+
+    def _start_remote_audio_consumer(
+        self,
+        context: LiveKitRoomContext,
+        participant_identity: str,
+        track: object,
+    ) -> None:
+        track_id = str(getattr(track, "sid", "") or id(track))
+        if track_id in context.consumed_track_ids:
+            return
+        context.consumed_track_ids.add(track_id)
+        logger.info(
+            "livekit_bridge_audio_track_subscribed session=%s participant=%s track=%s",
+            context.session_id,
+            participant_identity,
+            track_id,
+        )
+        task = asyncio.create_task(self._consume_remote_audio(context, participant_identity, track))
+        context.audio_tasks.add(task)
+        task.add_done_callback(context.audio_tasks.discard)
 
     async def stop_session(self, session: RoomPipelineSession) -> None:
         if not self._enabled:
@@ -243,12 +371,31 @@ class LiveKitBridge:
         if source is None:
             return
 
+        tts_provider = "none"
         pcm = await self._synthesize_gemini_tts_pcm(translated_text)
         if not pcm:
             voice = self._resolve_target_voice(context, target_identity)
             pcm = await self._synthesize_edge_tts_pcm(translated_text, voice)
+            if pcm:
+                tts_provider = "edge_tts"
+        else:
+            tts_provider = "gemini_tts"
         if pcm:
+            logger.info(
+                "livekit_bridge_tts_pcm_ready session=%s target=%s provider=%s text_len=%s pcm_bytes=%s",
+                context.session_id,
+                target_identity,
+                tts_provider,
+                len(translated_text),
+                len(pcm),
+            )
             await self._publish_pcm(source, pcm, self._tts_sample_rate, self._tts_channels)
+            logger.info(
+                "livekit_bridge_tts_published session=%s target=%s provider=%s",
+                context.session_id,
+                target_identity,
+                tts_provider,
+            )
             return
 
         logger.warning(
@@ -273,6 +420,8 @@ class LiveKitBridge:
         voiced_ms = 0
         buffer = bytearray()
         frame_count = 0
+        peak_rms = 0
+        segment_peak_rms = 0
 
         participant = context.session.participant_by_identity.get(speaker_identity, {})
         source_lang_hint = participant.get("source_language") if participant else None
@@ -285,8 +434,19 @@ class LiveKitBridge:
                 if not data:
                     continue
 
+                if frame_count == 0:
+                    logger.info(
+                        "livekit_bridge_audio_frame_received session=%s participant=%s sample_rate=%s bytes=%s",
+                        context.session_id,
+                        speaker_identity,
+                        sample_rate,
+                        len(data),
+                    )
+
                 frame_ms = int((len(data) // 2) * 1000 / sample_rate)
                 rms = audioop.rms(data, 2)
+                peak_rms = max(peak_rms, rms)
+                segment_peak_rms = max(segment_peak_rms, rms)
                 voiced = rms >= self._stt_energy_threshold
 
                 if voiced:
@@ -307,20 +467,38 @@ class LiveKitBridge:
                     segment = bytes(buffer)
                     segment_speech_ms = speech_ms
                     segment_voiced_ms = voiced_ms
+                    segment_peak = segment_peak_rms
                     buffer.clear()
                     in_speech = False
                     silence_ms = 0
                     speech_ms = 0
                     voiced_ms = 0
+                    segment_peak_rms = 0
 
                     voiced_ratio = (
                         (segment_voiced_ms / segment_speech_ms) if segment_speech_ms > 0 else 0.0
                     )
-                    if (
+                    accept_normal = (
                         segment_speech_ms >= self._stt_min_speech_ms
                         and segment_voiced_ms >= self._stt_min_voiced_ms
                         and voiced_ratio >= self._stt_min_voiced_ratio
-                    ):
+                    )
+                    accept_peak_force = (
+                        segment_speech_ms >= self._stt_min_speech_ms
+                        and segment_peak >= self._stt_force_segment_peak_rms
+                        and segment_voiced_ms >= self._stt_force_segment_min_voiced_ms
+                    )
+                    if accept_normal or accept_peak_force:
+                        logger.info(
+                            "livekit_bridge_vad_segment_accepted session=%s participant=%s speech_ms=%s voiced_ms=%s voiced_ratio=%.2f peak_rms=%s mode=%s",
+                            context.session_id,
+                            speaker_identity,
+                            segment_speech_ms,
+                            segment_voiced_ms,
+                            voiced_ratio,
+                            segment_peak,
+                            "normal" if accept_normal else "peak_force",
+                        )
                         task = asyncio.create_task(
                             self._handle_speech_segment(
                                 context=context,
@@ -332,17 +510,32 @@ class LiveKitBridge:
                         )
                         context.audio_tasks.add(task)
                         task.add_done_callback(context.audio_tasks.discard)
+                    else:
+                        logger.info(
+                            "livekit_bridge_vad_segment_dropped session=%s participant=%s speech_ms=%s voiced_ms=%s voiced_ratio=%.2f peak_rms=%s threshold=%s",
+                            context.session_id,
+                            speaker_identity,
+                            segment_speech_ms,
+                            segment_voiced_ms,
+                            voiced_ratio,
+                            segment_peak,
+                            self._stt_energy_threshold,
+                        )
 
                 frame_count += 1
                 if frame_count % 200 == 0:
-                    logger.debug(
-                        "livekit_bridge_audio_observed",
-                        extra={
-                            "session_id": context.session_id,
-                            "speaker_identity": speaker_identity,
-                            "frames": frame_count,
-                        },
+                    logger.info(
+                        "livekit_bridge_audio_observed session=%s participant=%s frames=%s peak_rms=%s threshold=%s in_speech=%s speech_ms=%s voiced_ms=%s",
+                        context.session_id,
+                        speaker_identity,
+                        frame_count,
+                        peak_rms,
+                        self._stt_energy_threshold,
+                        in_speech,
+                        speech_ms,
+                        voiced_ms,
                     )
+                    peak_rms = 0
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -356,12 +549,29 @@ class LiveKitBridge:
             )
         finally:
             final_voiced_ratio = (voiced_ms / speech_ms) if speech_ms > 0 else 0.0
-            if (
+            final_accept_normal = (
                 buffer
                 and speech_ms >= self._stt_min_speech_ms
                 and voiced_ms >= self._stt_min_voiced_ms
                 and final_voiced_ratio >= self._stt_min_voiced_ratio
-            ):
+            )
+            final_accept_peak_force = (
+                buffer
+                and speech_ms >= self._stt_min_speech_ms
+                and segment_peak_rms >= self._stt_force_segment_peak_rms
+                and voiced_ms >= self._stt_force_segment_min_voiced_ms
+            )
+            if final_accept_normal or final_accept_peak_force:
+                logger.info(
+                    "livekit_bridge_vad_tail_accepted session=%s participant=%s speech_ms=%s voiced_ms=%s voiced_ratio=%.2f peak_rms=%s mode=%s",
+                    context.session_id,
+                    speaker_identity,
+                    speech_ms,
+                    voiced_ms,
+                    final_voiced_ratio,
+                    segment_peak_rms,
+                    "normal" if final_accept_normal else "peak_force",
+                )
                 task = asyncio.create_task(
                     self._handle_speech_segment(
                         context=context,
@@ -394,6 +604,11 @@ class LiveKitBridge:
         text = await self._transcribe_speech(pcm16=pcm16, sample_rate=sample_rate, language=source_lang_hint)
         if not text:
             return
+        logger.info(
+            "livekit_bridge_stt_text speaker=%s text=%s",
+            speaker_identity,
+            text[:160],
+        )
         normalized = " ".join(text.lower().split())
         if len(normalized) < 2:
             return
@@ -434,6 +649,9 @@ class LiveKitBridge:
 
     async def _transcribe_gemini_pcm16(self, *, pcm16: bytes, sample_rate: int, language: str | None) -> str:
         if not self._gemini_api_key:
+            return ""
+        now = asyncio.get_running_loop().time()
+        if now < self._gemini_stt_blocked_until:
             return ""
 
         wav_bytes = self._pcm16_to_wav_bytes(pcm16=pcm16, sample_rate=sample_rate, channels=1)
@@ -491,6 +709,15 @@ class LiveKitBridge:
                     max_attempts,
                     body,
                 )
+                lowered_body = body.lower()
+                if status == 429 and (
+                    "prepayment credits are depleted" in lowered_body
+                    or "resource_exhausted" in lowered_body
+                ):
+                    # Avoid hammering Gemini when account credit is exhausted.
+                    self._gemini_stt_blocked_until = asyncio.get_running_loop().time() + 3600.0
+                    logger.warning("livekit_bridge_stt_gemini_blocked_for_1h_quota_exhausted")
+                    return ""
                 if status in retryable_statuses and attempt < max_attempts:
                     await asyncio.sleep(0.35 * attempt)
                     continue
@@ -566,12 +793,32 @@ class LiveKitBridge:
             if model is None:
                 return ""
             audio = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
-            kwargs: dict[str, object] = {"beam_size": 1, "vad_filter": True}
+            # First pass: fast decode with light VAD.
+            kwargs: dict[str, object] = {"beam_size": 3, "vad_filter": True}
             if language:
                 kwargs["language"] = language
             segments, _info = model.transcribe(audio, **kwargs)
             text = " ".join(seg.text.strip() for seg in segments if getattr(seg, "text", "").strip()).strip()
-            return text
+            if text:
+                return text
+
+            # Second pass fallback: disable Whisper VAD and remove language hint.
+            # This helps when very short/soft utterances get filtered out.
+            retry_kwargs: dict[str, object] = {"beam_size": 3, "vad_filter": False}
+            retry_segments, _retry_info = model.transcribe(audio, **retry_kwargs)
+            retry_text = " ".join(
+                seg.text.strip() for seg in retry_segments if getattr(seg, "text", "").strip()
+            ).strip()
+            if retry_text:
+                logger.info("livekit_bridge_local_stt_retry_success")
+                return retry_text
+
+            logger.info(
+                "livekit_bridge_local_stt_empty duration_ms=%s lang_hint=%s",
+                int((len(pcm16) // 2) * 1000 / sample_rate),
+                language or "",
+            )
+            return ""
         except Exception as exc:  # noqa: BLE001
             logger.warning("livekit_bridge_local_stt_failed error=%s", str(exc))
             return ""
@@ -616,19 +863,56 @@ class LiveKitBridge:
                 text=text,
                 voice=voice or self._edge_tts_voice_default,
                 rate=self._edge_tts_rate,
-                output_format="raw-24khz-16bit-mono-pcm",
             )
-            output = bytearray()
+            compressed = bytearray()
             async for chunk in communicate.stream():
                 if chunk.get("type") == "audio":
-                    output.extend(chunk.get("data", b""))
-            return bytes(output) if output else None
+                    compressed.extend(chunk.get("data", b""))
+            if not compressed:
+                logger.warning("livekit_bridge_edge_tts_empty_audio voice=%s", voice)
+                return None
+            pcm = self._decode_compressed_audio_to_pcm16(
+                bytes(compressed),
+                target_sample_rate=self._tts_sample_rate,
+                target_channels=self._tts_channels,
+            )
+            if not pcm:
+                logger.warning("livekit_bridge_edge_tts_decode_empty voice=%s", voice)
+            return pcm
         except Exception as exc:  # noqa: BLE001
-            logger.warning("livekit_bridge_edge_tts_failed", extra={"error": str(exc)})
+            logger.warning("livekit_bridge_edge_tts_failed error=%s voice=%s", str(exc), voice)
+            return None
+
+    def _decode_compressed_audio_to_pcm16(
+        self,
+        payload: bytes,
+        *,
+        target_sample_rate: int,
+        target_channels: int,
+    ) -> bytes | None:
+        decoded = bytearray()
+        try:
+            with av.open(io.BytesIO(payload), mode="r") as container:
+                audio_stream = container.streams.audio[0]
+                resampler = av.audio.resampler.AudioResampler(
+                    format="s16",
+                    layout="mono" if target_channels == 1 else "stereo",
+                    rate=target_sample_rate,
+                )
+                for packet in container.demux(audio_stream):
+                    for frame in packet.decode():
+                        for out_frame in resampler.resample(frame):
+                            decoded.extend(bytes(out_frame.planes[0]))
+            return bytes(decoded) if decoded else None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("livekit_bridge_edge_tts_decode_failed error=%s", str(exc))
             return None
 
     async def _synthesize_gemini_tts_pcm(self, text: str) -> bytes | None:
         if not self._gemini_api_key:
+            return None
+        now = asyncio.get_running_loop().time()
+        if now < self._gemini_tts_blocked_until:
             return None
         try:
             async with httpx.AsyncClient(timeout=40.0) as client:
@@ -660,6 +944,21 @@ class LiveKitBridge:
                         if "pcm" not in mime_type.lower():
                             return None
                         return base64.b64decode(str(inline_data["data"]))
+        except httpx.HTTPStatusError as exc:
+            body = ""
+            try:
+                body = exc.response.text[:1200]
+            except Exception:  # noqa: BLE001
+                body = ""
+            lowered_body = body.lower()
+            if exc.response.status_code == 429 and (
+                "prepayment credits are depleted" in lowered_body
+                or "resource_exhausted" in lowered_body
+            ):
+                self._gemini_tts_blocked_until = asyncio.get_running_loop().time() + 3600.0
+                logger.warning("livekit_bridge_tts_gemini_blocked_for_1h_quota_exhausted")
+                return None
+            logger.warning("livekit_bridge_gemini_tts_failed status=%s body=%s", exc.response.status_code, body)
         except Exception as exc:  # noqa: BLE001
             logger.warning("livekit_bridge_gemini_tts_failed", extra={"error": str(exc)})
         return None
@@ -669,6 +968,7 @@ class LiveKitBridge:
             return
         samples_per_frame = int(sample_rate * 0.02)  # 20ms
         bytes_per_frame = samples_per_frame * channels * 2
+        frame_count = 0
         offset = 0
         while offset < len(pcm16):
             chunk = pcm16[offset : offset + bytes_per_frame]
@@ -682,6 +982,14 @@ class LiveKitBridge:
             )
             await source.capture_frame(frame)
             offset += bytes_per_frame
+            frame_count += 1
+        logger.info(
+            "livekit_bridge_pcm_frames_published sample_rate=%s channels=%s frames=%s pcm_bytes=%s",
+            sample_rate,
+            channels,
+            frame_count,
+            len(pcm16),
+        )
 
     async def _publish_fallback_tone(self, source: object, translated_text: str) -> None:
         if rtc is None:
@@ -712,9 +1020,20 @@ class LiveKitBridge:
     def _resolve_target_voice(self, context: LiveKitRoomContext, target_identity: str) -> str:
         participant = context.session.participant_by_identity.get(target_identity, {})
         voice_profile = str(participant.get("voice_profile", "")).strip()
-        if voice_profile:
+        if voice_profile and self._is_valid_edge_voice_name(voice_profile):
             return voice_profile
-        target_lang = str(participant.get("target_language", "")).lower()
+        # We synthesize in the listener's source language.
+        target_lang = str(participant.get("source_language", "")).lower()
         if target_lang.startswith("vi"):
             return "vi-VN-HoaiMyNeural"
+        if target_lang.startswith("ja"):
+            return "ja-JP-NanamiNeural"
+        if target_lang.startswith("zh"):
+            return "zh-CN-XiaoxiaoNeural"
+        if target_lang.startswith("ko"):
+            return "ko-KR-SunHiNeural"
         return self._edge_tts_voice_default
+
+    def _is_valid_edge_voice_name(self, value: str) -> bool:
+        # Typical format: en-US-AriaNeural
+        return "-" in value and value.endswith("Neural") and len(value) >= 12

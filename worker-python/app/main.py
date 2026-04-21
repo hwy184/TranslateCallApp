@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 import asyncio
+import logging
 from .api.routes import build_router
 from .config.settings import get_settings
 from .sessions.manager import SessionManager
@@ -10,6 +11,11 @@ from .services.livekit_bridge import LiveKitBridge
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        format="%(levelname)s:%(name)s:%(message)s",
+        force=True,
+    )
     app = FastAPI(title=settings.app_name)
     backend_events = BackendEventsClient(settings)
     livekit_bridge = LiveKitBridge(settings)

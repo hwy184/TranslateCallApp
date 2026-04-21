@@ -60,41 +60,48 @@ class OllamaTranslateProvider(TranslateProvider):
 
         async with httpx.AsyncClient(timeout=self._timeout_sec) as client:
             if self._base_url.endswith("/v1"):
+                try:
+                    response = await client.post(
+                        f"{self._base_url}/chat/completions",
+                        json={
+                            "model": self._model,
+                            "temperature": 0.2,
+                            "messages": [
+                                {"role": "system", "content": "Return only translated text."},
+                                {"role": "user", "content": prompt},
+                            ],
+                        },
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    translated_text = _trim_json_text(
+                        data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    )
+                    if not translated_text:
+                        raise RuntimeError("ollama_empty_response_v1")
+                    return TranslateResult(translated_text=translated_text, provider=self.name)
+                except httpx.TimeoutException as exc:
+                    raise RuntimeError(f"ollama_timeout_v1:{self._timeout_sec}s") from exc
+
+            try:
                 response = await client.post(
-                    f"{self._base_url}/chat/completions",
+                    f"{self._base_url}/api/generate",
                     json={
                         "model": self._model,
-                        "temperature": 0.2,
-                        "messages": [
-                            {"role": "system", "content": "Return only translated text."},
-                            {"role": "user", "content": prompt},
-                        ],
+                        "prompt": prompt,
+                        "stream": False,
+                        "keep_alive": "30m",
+                        "options": {"temperature": 0.2},
                     },
                 )
                 response.raise_for_status()
                 data = response.json()
-                translated_text = _trim_json_text(
-                    data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                )
+                translated_text = _trim_json_text(data.get("response", ""))
                 if not translated_text:
-                    raise RuntimeError("ollama_empty_response_v1")
+                    raise RuntimeError("ollama_empty_response")
                 return TranslateResult(translated_text=translated_text, provider=self.name)
-
-            response = await client.post(
-                f"{self._base_url}/api/generate",
-                json={
-                    "model": self._model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {"temperature": 0.2},
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            translated_text = _trim_json_text(data.get("response", ""))
-            if not translated_text:
-                raise RuntimeError("ollama_empty_response")
-            return TranslateResult(translated_text=translated_text, provider=self.name)
+            except httpx.TimeoutException as exc:
+                raise RuntimeError(f"ollama_timeout:{self._timeout_sec}s") from exc
 
 
 class OpenAITranslateProvider(TranslateProvider):
