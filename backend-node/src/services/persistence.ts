@@ -12,7 +12,8 @@ function mapUser(row: Record<string, unknown>): User {
   return {
     userId: String(row.user_id),
     type: row.user_type === "registered" ? "registered" : "guest",
-    displayName: String(row.display_name)
+    displayName: String(row.display_name),
+    email: row.email ? String(row.email) : undefined
   };
 }
 
@@ -31,10 +32,11 @@ function mapParticipant(row: Record<string, unknown>): Participant {
 function mapRoom(row: Record<string, unknown>): Room {
   return {
     roomId: String(row.room_id),
+    roomCode: String(row.room_code),
     sessionId: String(row.session_id),
     hostParticipantId: String(row.host_participant_id),
     guestParticipantId: row.guest_participant_id ? String(row.guest_participant_id) : undefined,
-    status: (row.status as Room["status"]) ?? "waiting_guest",
+    status: (row.status as Room["status"]) ?? "waiting",
     createdAt: new Date(String(row.created_at)).toISOString(),
     endedAt: row.ended_at ? new Date(String(row.ended_at)).toISOString() : undefined,
     providerProfile: String(row.provider_profile),
@@ -53,61 +55,82 @@ async function ensureUser(client: PoolClient, userId: string, type: "guest" | "r
   );
 }
 
+function generateRoomCode(): string {
+  const random = Math.floor(Math.random() * 1_000_000);
+  return String(random).padStart(6, "0");
+}
+
 export const persistence = {
-  async createGuest(displayName: string): Promise<{ user: User; session: AuthSession }> {
+  async createGuest(displayName: string): Promise<User> {
     const userId = `guest_${randomUUID()}`;
-    const accessToken = `local_${randomUUID()}`;
 
     return withTransaction(async (client) => {
       await client.query(
         "INSERT INTO users(user_id, user_type, display_name) VALUES ($1, 'guest', $2)",
         [userId, displayName]
       );
-      const sessionRow = await client.query(
-        "INSERT INTO auth_sessions(access_token, user_id) VALUES ($1, $2) RETURNING access_token, created_at",
-        [accessToken, userId]
-      );
-
-      return {
-        user: { userId, type: "guest", displayName },
-        session: {
-          accessToken,
-          userId,
-          createdAt: new Date(String(sessionRow.rows[0].created_at)).toISOString()
-        }
-      };
+      return { userId, type: "guest", displayName };
     });
   },
 
-  async createRegisteredSession(username: string): Promise<{ user: User; session: AuthSession }> {
-    const accessToken = `local_${randomUUID()}`;
+  async registerRegisteredUser(input: {
+    email: string;
+    passwordHash: string;
+    passwordSalt: string;
+    displayName: string;
+  }): Promise<User> {
+    const userId = `user_${randomUUID()}`;
 
-    return withTransaction(async (client) => {
-      const userRow = await client.query(
-        `
-          INSERT INTO users(user_id, user_type, display_name, username)
-          VALUES ($1, 'registered', $2, $3)
-          ON CONFLICT (username) DO UPDATE SET display_name = EXCLUDED.display_name
-          RETURNING user_id, user_type, display_name
-        `,
-        [`user_${randomUUID()}`, username, username]
-      );
+    const userRow = await pool.query(
+      `
+        INSERT INTO users(user_id, user_type, display_name, email, password_hash, password_salt)
+        VALUES ($1, 'registered', $2, $3, $4, $5)
+        RETURNING user_id, user_type, display_name, email
+      `,
+      [userId, input.displayName, input.email.toLowerCase(), input.passwordHash, input.passwordSalt]
+    );
 
-      const user = mapUser(userRow.rows[0]);
-      const sessionRow = await client.query(
-        "INSERT INTO auth_sessions(access_token, user_id) VALUES ($1, $2) RETURNING access_token, created_at",
-        [accessToken, user.userId]
-      );
+    return mapUser(userRow.rows[0]);
+  },
 
-      return {
-        user,
-        session: {
-          accessToken,
-          userId: user.userId,
-          createdAt: new Date(String(sessionRow.rows[0].created_at)).toISOString()
-        }
-      };
-    });
+  async loginRegisteredUser(input: { email: string }): Promise<
+    | {
+        user: User;
+        passwordHash: string;
+        passwordSalt: string;
+      }
+    | undefined
+  > {
+    const result = await pool.query(
+      `
+        SELECT user_id, user_type, display_name, email, password_hash, password_salt
+        FROM users
+        WHERE user_type = 'registered' AND LOWER(email) = LOWER($1)
+        LIMIT 1
+      `,
+      [input.email]
+    );
+    if ((result.rowCount ?? 0) === 0) {
+      return undefined;
+    }
+    return {
+      user: mapUser(result.rows[0]),
+      passwordHash: String(result.rows[0].password_hash ?? ""),
+      passwordSalt: String(result.rows[0].password_salt ?? "")
+    };
+  },
+
+  async createAuthSession(userId: string, accessToken: string): Promise<AuthSession> {
+    const sessionRow = await pool.query(
+      "INSERT INTO auth_sessions(access_token, user_id) VALUES ($1, $2) RETURNING access_token, user_id, created_at",
+      [accessToken, userId]
+    );
+
+    return {
+      accessToken: String(sessionRow.rows[0].access_token),
+      userId: String(sessionRow.rows[0].user_id),
+      createdAt: new Date(String(sessionRow.rows[0].created_at)).toISOString()
+    };
   },
 
   async deleteAuthSession(accessToken: string): Promise<boolean> {
@@ -136,13 +159,26 @@ export const persistence = {
     return withTransaction(async (client) => {
       await ensureUser(client, input.hostUserId, "registered", input.hostIdentity);
 
+      let roomCode = "";
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        roomCode = generateRoomCode();
+        const exists = await client.query("SELECT 1 FROM rooms WHERE room_code = $1 LIMIT 1", [roomCode]);
+        if ((exists.rowCount ?? 0) === 0) {
+          break;
+        }
+      }
+
+      if (!roomCode) {
+        throw new Error("room_code_generation_failed");
+      }
+
       await client.query(
         `
           INSERT INTO rooms(
-            room_id, session_id, host_participant_id, status, provider_profile, supported_languages
-          ) VALUES ($1, $2, $3, 'waiting_guest', $4, $5::jsonb)
+            room_id, room_code, session_id, host_participant_id, status, provider_profile, supported_languages
+          ) VALUES ($1, $2, $3, $4, 'waiting', $5, $6::jsonb)
         `,
-        [roomId, sessionId, hostParticipantId, input.providerProfile, JSON.stringify(input.supportedLanguages)]
+        [roomId, roomCode, sessionId, hostParticipantId, input.providerProfile, JSON.stringify(input.supportedLanguages)]
       );
 
       const participantRow = await client.query(
@@ -156,7 +192,7 @@ export const persistence = {
 
       const roomRow = await client.query(
         `
-          SELECT room_id, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+          SELECT room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
           FROM rooms WHERE room_id = $1
         `,
         [roomId]
@@ -172,7 +208,7 @@ export const persistence = {
   async getRoom(roomId: string): Promise<Room | undefined> {
     const result = await pool.query(
       `
-        SELECT room_id, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+        SELECT room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
         FROM rooms
         WHERE room_id = $1
       `,
@@ -188,13 +224,13 @@ export const persistence = {
     const normalized = shortCode.trim().toLowerCase();
     const result = await pool.query(
       `
-        SELECT room_id, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+        SELECT room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
         FROM rooms
-        WHERE RIGHT(room_id, $1) = $2 AND status <> 'ended'
+        WHERE room_code = $1 AND status <> 'closed'
         ORDER BY created_at DESC
         LIMIT 1
       `,
-      [normalized.length, normalized]
+      [normalized]
     );
     if ((result.rowCount ?? 0) === 0) {
       return undefined;
@@ -211,7 +247,7 @@ export const persistence = {
     return withTransaction(async (client) => {
       const roomResult = await client.query(
         `
-          SELECT room_id, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+          SELECT room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
           FROM rooms
           WHERE room_id = $1
           FOR UPDATE
@@ -224,7 +260,7 @@ export const persistence = {
       }
 
       const room = mapRoom(roomResult.rows[0]);
-      if (room.status === "ended") {
+      if (room.status === "closed") {
         throw new Error("room_ended");
       }
       if (room.guestParticipantId) {
@@ -247,7 +283,7 @@ export const persistence = {
           UPDATE rooms
           SET guest_participant_id = $1, status = 'active'
           WHERE room_id = $2
-          RETURNING room_id, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+          RETURNING room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
         `,
         [guestParticipantId, input.roomId]
       );
@@ -263,7 +299,7 @@ export const persistence = {
     return withTransaction(async (client) => {
       const roomRow = await client.query(
         `
-          SELECT room_id, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+          SELECT room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
           FROM rooms
           WHERE room_id = $1
           FOR UPDATE
@@ -275,16 +311,16 @@ export const persistence = {
       }
 
       const current = mapRoom(roomRow.rows[0]);
-      if (current.status === "ended") {
+      if (current.status === "closed") {
         return current;
       }
 
       const updated = await client.query(
         `
           UPDATE rooms
-          SET status = 'ended', ended_at = NOW()
+          SET status = 'closed', ended_at = NOW()
           WHERE room_id = $1
-          RETURNING room_id, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+          RETURNING room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
         `,
         [roomId]
       );
@@ -441,6 +477,47 @@ export const persistence = {
   async deleteHistoryItem(id: number): Promise<boolean> {
     const result = await pool.query("DELETE FROM transcript_items WHERE id = $1", [id]);
     return (result.rowCount ?? 0) > 0;
+  },
+
+  async deleteHistoryBySession(sessionId: string): Promise<number> {
+    const result = await pool.query("DELETE FROM transcript_items WHERE session_id = $1", [sessionId]);
+    return result.rowCount ?? 0;
+  },
+
+  async deleteAllHistory(): Promise<number> {
+    const result = await pool.query("DELETE FROM transcript_items");
+    return result.rowCount ?? 0;
+  },
+
+  async syncHistoryItems(items: Array<Omit<HistoryItem, "id" | "created_at"> & { created_at?: string }>): Promise<number> {
+    if (!items.length) return 0;
+    let inserted = 0;
+    await withTransaction(async (client) => {
+      for (const item of items) {
+        const result = await client.query(
+          `
+            INSERT INTO transcript_items(
+              room_id, session_id, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, NOW()))
+          `,
+          [
+            item.room_id,
+            item.session_id,
+            item.utterance_id,
+            item.speaker_identity,
+            item.source_lang,
+            item.target_lang,
+            item.source_text ?? null,
+            item.translated_text ?? null,
+            item.event_type,
+            item.created_at ?? null
+          ]
+        );
+        inserted += result.rowCount ?? 0;
+      }
+    });
+    return inserted;
   },
 
   async upsertVoicePreference(input: {

@@ -1,21 +1,42 @@
 import { Router } from "express";
 import { z } from "zod";
+import { env } from "../config/env.js";
+import { hashPassword, verifyPassword } from "../services/password.js";
+import { signHs256 } from "../services/jwt.js";
 import { createLivekitToken } from "../services/livekit-token.js";
 import { persistence } from "../services/persistence.js";
 import { startWorkerSession, stopWorkerSession } from "../services/worker-client.js";
 import { ERROR_CODES, sendError } from "../types/api-error.js";
 const v1Router = Router();
 const defaultSettingsSchema = z.object({
-    source_language: z.string().min(2).default("vi"),
-    target_language: z.string().min(2).default("en"),
+    source_language: z.enum(["vi", "en"]).default("vi"),
+    target_language: z.enum(["vi", "en"]).default("en"),
     voice_profile: z.string().min(1).default("default")
+});
+const authGuestSchema = z.object({
+    display_name: z.string().min(1).max(80).default("Guest User")
+});
+const authRegisterSchema = z.object({
+    email: z.string().email(),
+    password: z.string().min(8),
+    display_name: z.string().min(1).max(80).optional()
+});
+const authLoginSchema = z.object({
+    email: z.string().email(),
+    password: z.string().min(1)
+});
+const authLogoutSchema = z.object({
+    access_token: z.string().min(1).optional()
 });
 const roomCreateSchema = z.object({
     host_user_id: z.string().min(1),
     host_identity: z.string().min(1),
     host_display_name: z.string().min(1),
-    provider_profile: z.string().min(1).default("gemini-first"),
-    supported_languages: z.array(z.string().min(2)).min(2).default(["vi", "en"]),
+    provider_profile: z.string().min(1).default("google-first"),
+    supported_languages: z.array(z.enum(["vi", "en"]))
+        .min(2)
+        .max(2)
+        .default(["vi", "en"]),
     host_settings: defaultSettingsSchema.default({
         source_language: "vi",
         target_language: "en",
@@ -33,30 +54,30 @@ const roomJoinSchema = z.object({
         voice_profile: "guest-default"
     })
 });
-const authGuestSchema = z.object({
-    display_name: z.string().min(1).default("Guest User")
-});
-const authLoginSchema = z.object({
-    username: z.string().min(1)
-});
-const authLogoutSchema = z.object({
-    access_token: z.string().min(1)
-});
 const patchSettingsSchema = z.object({
-    source_language: z.string().min(2).optional(),
-    target_language: z.string().min(2).optional(),
+    source_language: z.enum(["vi", "en"]).optional(),
+    target_language: z.enum(["vi", "en"]).optional(),
     voice_profile: z.string().min(1).optional()
-});
-const voicePreferenceSchema = z.object({
-    user_id: z.string().min(1),
-    speed: z.number().min(0.5).max(2).optional(),
-    gender: z.enum(["male", "female", "neutral"]).optional(),
-    profile: z.string().min(1).optional()
 });
 const historyQuerySchema = z.object({
     room_id: z.string().min(1).optional(),
     session_id: z.string().min(1).optional(),
     limit: z.coerce.number().int().positive().max(500).default(100)
+});
+const historySyncItemSchema = z.object({
+    room_id: z.string().min(1),
+    session_id: z.string().min(1),
+    utterance_id: z.string().min(1),
+    speaker_identity: z.string().min(1),
+    source_lang: z.enum(["vi", "en"]),
+    target_lang: z.enum(["vi", "en"]),
+    source_text: z.string().nullable().optional(),
+    translated_text: z.string().nullable().optional(),
+    event_type: z.string().min(1),
+    created_at: z.string().datetime({ offset: true }).optional()
+});
+const historySyncSchema = z.object({
+    items: z.array(historySyncItemSchema).min(1)
 });
 const workerEventSchema = z
     .object({
@@ -83,23 +104,28 @@ const workerEventSchema = z
     .superRefine((event, ctx) => {
     const needsUtteranceFields = event.type === "subtitle.final" || event.type === "translation.final";
     if (needsUtteranceFields) {
-        if (!event.utterance_id) {
-            ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["utterance_id"], message: "utterance_id is required for subtitle/translation events" });
-        }
-        if (!event.speaker_identity) {
-            ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["speaker_identity"], message: "speaker_identity is required for subtitle/translation events" });
-        }
-        if (!event.source_lang) {
-            ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["source_lang"], message: "source_lang is required for subtitle/translation events" });
-        }
-        if (!event.target_lang) {
-            ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["target_lang"], message: "target_lang is required for subtitle/translation events" });
-        }
+        if (!event.utterance_id)
+            ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["utterance_id"], message: "utterance_id is required" });
+        if (!event.speaker_identity)
+            ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["speaker_identity"], message: "speaker_identity is required" });
+        if (!event.source_lang)
+            ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["source_lang"], message: "source_lang is required" });
+        if (!event.target_lang)
+            ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["target_lang"], message: "target_lang is required" });
     }
     if (event.type === "translation.final" && !event.translated_text) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["translated_text"], message: "translated_text is required for translation.final" });
     }
 });
+function issueJwt(userId, role) {
+    const now = Math.floor(Date.now() / 1000);
+    return signHs256({
+        sub: userId,
+        role,
+        iat: now,
+        exp: now + 60 * 60 * 24 * 7
+    }, env.JWT_SECRET);
+}
 function participantMetadata(role, identity, settings) {
     return {
         role,
@@ -118,33 +144,70 @@ function roomMetadata(sessionId, providerProfile, supportedLanguages) {
         provider_profile: providerProfile
     };
 }
-function roomShortCode(roomId) {
-    return roomId.replace(/^room_/, "").slice(-8);
-}
 v1Router.post("/auth/guest", async (req, res) => {
     try {
         const payload = authGuestSchema.parse(req.body);
-        const result = await persistence.createGuest(payload.display_name);
-        res.status(201).json({
-            user: result.user,
-            session: result.session
-        });
+        const user = await persistence.createGuest(payload.display_name);
+        const token = issueJwt(user.userId, "guest");
+        const session = await persistence.createAuthSession(user.userId, token);
+        res.status(201).json({ user, session });
     }
     catch (error) {
         const message = error instanceof Error ? error.message : "create_guest_failed";
         sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Create guest failed", message);
     }
 });
+v1Router.post("/auth/register", async (req, res) => {
+    try {
+        const payload = authRegisterSchema.parse(req.body);
+        const normalizedEmail = payload.email.trim().toLowerCase();
+        const existed = await persistence.loginRegisteredUser({ email: normalizedEmail });
+        if (existed) {
+            sendError(res, 409, ERROR_CODES.AUTH_EMAIL_EXISTS, "Email already exists");
+            return;
+        }
+        const { hash, salt } = hashPassword(payload.password);
+        const user = await persistence.registerRegisteredUser({
+            email: normalizedEmail,
+            passwordHash: hash,
+            passwordSalt: salt,
+            displayName: payload.display_name?.trim() || normalizedEmail
+        });
+        const sessionToken = issueJwt(user.userId, "registered");
+        const session = await persistence.createAuthSession(user.userId, sessionToken);
+        res.status(201).json({ user, session });
+    }
+    catch (error) {
+        if (error instanceof z.ZodError) {
+            sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Invalid register payload", error.issues);
+            return;
+        }
+        const message = error instanceof Error ? error.message : "register_failed";
+        sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Register failed", message);
+    }
+});
 v1Router.post("/auth/login", async (req, res) => {
     try {
         const payload = authLoginSchema.parse(req.body);
-        const result = await persistence.createRegisteredSession(payload.username);
-        res.status(200).json({
-            user: result.user,
-            session: result.session
-        });
+        const result = await persistence.loginRegisteredUser({ email: payload.email.trim().toLowerCase() });
+        if (!result || !result.passwordHash || !result.passwordSalt) {
+            sendError(res, 401, ERROR_CODES.AUTH_INVALID_CREDENTIALS, "Invalid credentials");
+            return;
+        }
+        const ok = verifyPassword(payload.password, result.passwordSalt, result.passwordHash);
+        if (!ok) {
+            sendError(res, 401, ERROR_CODES.AUTH_INVALID_CREDENTIALS, "Invalid credentials");
+            return;
+        }
+        const accessToken = issueJwt(result.user.userId, "registered");
+        const session = await persistence.createAuthSession(result.user.userId, accessToken);
+        res.status(200).json({ user: result.user, session });
     }
     catch (error) {
+        if (error instanceof z.ZodError) {
+            sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Invalid login payload", error.issues);
+            return;
+        }
         const message = error instanceof Error ? error.message : "login_failed";
         sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Login failed", message);
     }
@@ -152,7 +215,14 @@ v1Router.post("/auth/login", async (req, res) => {
 v1Router.post("/auth/logout", async (req, res) => {
     try {
         const payload = authLogoutSchema.parse(req.body);
-        const removed = await persistence.deleteAuthSession(payload.access_token);
+        const tokenFromHeader = typeof req.headers["x-access-token"] === "string" ? req.headers["x-access-token"] : undefined;
+        const bearer = typeof req.headers.authorization === "string" ? req.headers.authorization.replace(/^Bearer\s+/i, "") : undefined;
+        const accessToken = payload.access_token ?? tokenFromHeader ?? bearer;
+        if (!accessToken) {
+            sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Missing access token");
+            return;
+        }
+        const removed = await persistence.deleteAuthSession(accessToken);
         if (!removed) {
             sendError(res, 404, ERROR_CODES.SESSION_NOT_FOUND, "Auth session was not found");
             return;
@@ -184,7 +254,7 @@ v1Router.post("/rooms", async (req, res) => {
         });
         res.status(201).json({
             room: created.room,
-            room_short_code: roomShortCode(created.room.roomId),
+            room_short_code: created.room.roomCode,
             participant: created.hostParticipant,
             metadata: {
                 room: roomMeta,
@@ -210,7 +280,7 @@ v1Router.post("/rooms/join", async (req, res) => {
             sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
             return;
         }
-        if (room.status === "ended") {
+        if (room.status === "closed") {
             sendError(res, 409, ERROR_CODES.ROOM_ENDED, "Room has already ended");
             return;
         }
@@ -264,7 +334,6 @@ v1Router.post("/rooms/join", async (req, res) => {
             });
         }
         catch (joinError) {
-            // Worker already started, so we attempt best-effort rollback.
             await stopWorkerSession(room.sessionId, "join_commit_failed").catch(() => undefined);
             throw joinError;
         }
@@ -278,7 +347,7 @@ v1Router.post("/rooms/join", async (req, res) => {
         });
         res.status(200).json({
             room: joined.room,
-            room_short_code: roomShortCode(joined.room.roomId),
+            room_short_code: joined.room.roomCode,
             participant: joined.guestParticipant,
             metadata: {
                 room: roomMeta,
@@ -314,18 +383,15 @@ v1Router.post("/rooms/join", async (req, res) => {
         sendError(res, 500, ERROR_CODES.JOIN_FAILED, "Join room failed", message);
     }
 });
-v1Router.get("/rooms/resolve/:shortCode", async (req, res) => {
-    const shortCode = z.string().min(4).max(32).parse(req.params.shortCode);
+v1Router.get("/rooms/resolve/:code", async (req, res) => {
+    const code = z.string().regex(/^\d{6}$/).parse(req.params.code.trim());
     try {
-        const room = await persistence.getRoomByShortCode(shortCode);
+        const room = await persistence.getRoomByShortCode(code);
         if (!room) {
             sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
             return;
         }
-        res.status(200).json({
-            room,
-            room_short_code: roomShortCode(room.roomId)
-        });
+        res.status(200).json({ room, room_short_code: room.roomCode });
     }
     catch (error) {
         const message = error instanceof Error ? error.message : "resolve_room_failed";
@@ -340,10 +406,7 @@ v1Router.get("/rooms/:roomId/status", async (req, res) => {
             sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
             return;
         }
-        res.status(200).json({
-            room,
-            room_short_code: roomShortCode(room.roomId)
-        });
+        res.status(200).json({ room, room_short_code: room.roomCode });
     }
     catch (error) {
         const message = error instanceof Error ? error.message : "room_status_failed";
@@ -358,8 +421,6 @@ v1Router.post("/rooms/:roomId/end", async (req, res) => {
         await stopWorkerSession(room.sessionId, "room_ended").catch((error) => {
             const message = error instanceof Error ? error.message : "worker_stop_failed";
             warnings.push(message);
-            // Best-effort cleanup: room is already ended in backend state.
-            // eslint-disable-next-line no-console
             console.warn(`[room:end] worker stop failed for ${room.sessionId}: ${message}`);
         });
         res.status(200).json({
@@ -401,11 +462,7 @@ v1Router.patch("/rooms/:roomId/participants/:participantId/settings", async (req
 v1Router.get("/history", async (req, res) => {
     try {
         const query = historyQuerySchema.parse(req.query);
-        const items = await persistence.listHistory({
-            roomId: query.room_id,
-            sessionId: query.session_id,
-            limit: query.limit
-        });
+        const items = await persistence.listHistory({ roomId: query.room_id, sessionId: query.session_id, limit: query.limit });
         res.status(200).json({ items });
     }
     catch (error) {
@@ -415,6 +472,21 @@ v1Router.get("/history", async (req, res) => {
         }
         const message = error instanceof Error ? error.message : "history_list_failed";
         sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "List history failed", message);
+    }
+});
+v1Router.post("/history/sync", async (req, res) => {
+    try {
+        const payload = historySyncSchema.parse(req.body);
+        const inserted = await persistence.syncHistoryItems(payload.items);
+        res.status(200).json({ synced: inserted, received: payload.items.length });
+    }
+    catch (error) {
+        if (error instanceof z.ZodError) {
+            sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Invalid history sync payload", error.issues);
+            return;
+        }
+        const message = error instanceof Error ? error.message : "sync_history_failed";
+        sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Sync history failed", message);
     }
 });
 v1Router.delete("/history/:id", async (req, res) => {
@@ -436,41 +508,18 @@ v1Router.delete("/history/:id", async (req, res) => {
         sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Delete history failed", message);
     }
 });
-v1Router.put("/me/preferences/voice", async (req, res) => {
+v1Router.delete("/history", async (_req, res) => {
     try {
-        const payload = voicePreferenceSchema.parse(req.body);
-        const settings = {};
-        if (payload.speed !== undefined)
-            settings.speed = payload.speed;
-        if (payload.gender !== undefined)
-            settings.gender = payload.gender;
-        if (payload.profile !== undefined)
-            settings.profile = payload.profile;
-        const preference = await persistence.upsertVoicePreference({
-            userId: payload.user_id,
-            settings
-        });
-        res.status(200).json({ preference });
+        const deleted = await persistence.deleteAllHistory();
+        res.status(200).json({ deleted });
     }
     catch (error) {
-        if (error instanceof z.ZodError) {
-            sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Invalid voice preference payload", error.issues);
-            return;
-        }
-        const message = error instanceof Error ? error.message : "upsert_voice_preference_failed";
-        if (message === "user_not_found") {
-            sendError(res, 404, ERROR_CODES.USER_NOT_FOUND, "User was not found");
-            return;
-        }
-        if (message === "user_not_registered") {
-            sendError(res, 403, ERROR_CODES.USER_NOT_REGISTERED, "Guest users cannot sync cloud voice preferences");
-            return;
-        }
-        sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Update voice preference failed", message);
+        const message = error instanceof Error ? error.message : "delete_all_history_failed";
+        sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Delete history failed", message);
     }
 });
 v1Router.post("/translate/text", (_req, res) => {
-    sendError(res, 501, ERROR_CODES.NOT_IMPLEMENTED, "POST /translate/text is planned after voice-room core");
+    sendError(res, 501, ERROR_CODES.NOT_IMPLEMENTED, "POST /translate/text is out of MVP scope");
 });
 v1Router.post("/internal/worker/events", async (req, res) => {
     try {

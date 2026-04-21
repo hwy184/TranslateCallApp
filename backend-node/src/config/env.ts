@@ -5,11 +5,12 @@ dotenv.config();
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  PORT: z.coerce.number().int().positive().default(8080),
+  PORT: z.coerce.number().int().positive().default(3000),
   LIVEKIT_URL: z.string().default(""),
   LIVEKIT_API_KEY: z.string().default(""),
   LIVEKIT_API_SECRET: z.string().default(""),
-  WORKER_INTERNAL_URL: z.string().url().default("http://worker:8090"),
+  JWT_SECRET: z.string().min(16).default("change-me-super-secret-key"),
+  WORKER_INTERNAL_URL: z.string().url().default("http://worker:8000"),
   DATABASE_URL: z.string().min(1).default("postgresql://postgres:postgres@postgres:5432/voice_translation")
 });
 

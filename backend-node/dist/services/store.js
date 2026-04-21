@@ -27,6 +27,7 @@ class InMemoryStore {
     }
     createRoom(input) {
         const roomId = `room_${randomUUID()}`;
+        const roomCode = String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0");
         const sessionId = `session_${randomUUID()}`;
         const hostParticipantId = `participant_${randomUUID()}`;
         const hostParticipant = {
@@ -39,9 +40,10 @@ class InMemoryStore {
         };
         const room = {
             roomId,
+            roomCode,
             sessionId,
             hostParticipantId,
-            status: "waiting_guest",
+            status: "waiting",
             createdAt: nowIso(),
             providerProfile: input.providerProfile,
             supportedLanguages: input.supportedLanguages
@@ -55,7 +57,7 @@ class InMemoryStore {
         if (!room) {
             throw new Error("room_not_found");
         }
-        if (room.status === "ended") {
+        if (room.status === "closed") {
             throw new Error("room_ended");
         }
         if (room.guestParticipantId) {
@@ -84,10 +86,10 @@ class InMemoryStore {
         if (!room) {
             throw new Error("room_not_found");
         }
-        if (room.status === "ended") {
+        if (room.status === "closed") {
             return room;
         }
-        const ended = { ...room, status: "ended", endedAt: nowIso() };
+        const ended = { ...room, status: "closed", endedAt: nowIso() };
         this.rooms.set(roomId, ended);
         return ended;
     }
