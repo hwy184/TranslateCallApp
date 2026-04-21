@@ -7,17 +7,17 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "voice-worker"
-    port: int = Field(default=8090, gt=0)
+    port: int = Field(default=8000, gt=0)
     log_level: str = "INFO"
     livekit_url: str = ""
     livekit_api_key: str = ""
     livekit_api_secret: str = ""
     livekit_bridge_enabled: bool = False
     livekit_worker_identity_prefix: str = "ai_worker_"
-    backend_events_url: str = "http://backend:8080/api/v1/internal/worker/events"
+    backend_events_url: str = "http://backend:3000/api/v1/internal/worker/events"
     backend_events_timeout_sec: float = Field(default=3.0, gt=0)
     backend_events_retries: int = Field(default=2, ge=0, le=5)
-    default_provider_profile: str = "free-first"
+    default_provider_profile: str = "google-first"
     ollama_base_url: str = "http://host.docker.internal:11434"
     ollama_translate_model: str = "gemma4:e4b"
     ollama_translate_timeout_sec: float = Field(default=75.0, ge=5.0, le=300.0)

@@ -89,6 +89,12 @@ class ProviderRegistry:
                 "translate": ["openai_translate", "ollama_translate", "rule_translate"],
                 "tts": ["edge_tts", "mock_tts"],
             },
+            "google-first": {
+                "vad": ["silero"],
+                "stt": ["google_stt", "openai_stt", "whisper_local"],
+                "translate": ["openai_translate", "gemini_translate", "rule_translate"],
+                "tts": ["google_tts", "edge_tts", "mock_tts"],
+            },
         }
 
     def resolve(self, profile: str) -> ProviderBundle:

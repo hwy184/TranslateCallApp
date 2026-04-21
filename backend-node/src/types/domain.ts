@@ -17,10 +17,11 @@ export interface Participant {
 
 export interface Room {
   roomId: string;
+  roomCode: string;
   sessionId: string;
   hostParticipantId: string;
   guestParticipantId?: string;
-  status: "waiting_guest" | "active" | "ended";
+  status: "waiting" | "active" | "closed";
   createdAt: string;
   endedAt?: string;
   providerProfile: string;
@@ -31,6 +32,7 @@ export interface User {
   userId: string;
   type: "guest" | "registered";
   displayName: string;
+  email?: string;
 }
 
 export interface AuthSession {
