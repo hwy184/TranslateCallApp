@@ -43,3 +43,4 @@ coverage/
 *.lcov
 
 readme
+readme/legacy
