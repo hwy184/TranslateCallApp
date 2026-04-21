@@ -14,7 +14,7 @@ const roomCreateSchema = z.object({
     host_user_id: z.string().min(1),
     host_identity: z.string().min(1),
     host_display_name: z.string().min(1),
-    provider_profile: z.string().min(1).default("silero+google_stt+openai_translate+google_tts"),
+    provider_profile: z.string().min(1).default("gemini-first"),
     supported_languages: z.array(z.string().min(2)).min(2).default(["vi", "en"]),
     host_settings: defaultSettingsSchema.default({
         source_language: "vi",

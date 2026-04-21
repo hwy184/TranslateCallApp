@@ -41,3 +41,5 @@ Thumbs.db
 # tests / coverage
 coverage/
 *.lcov
+
+readme
