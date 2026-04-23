@@ -28,6 +28,10 @@ services:
     container_name: voice_worker
     env_file:
       - ../worker-python/.env.example
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+    volumes:
+      - ../secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
     ports:
       - "8000:8000"
     healthcheck:

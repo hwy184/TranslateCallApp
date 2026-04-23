@@ -87,6 +87,40 @@ class RoomPipelineSession:
     def list_events(self) -> list[SessionEvent]:
         return list(self.events)
 
+    def update_participant_settings(self, identity: str, settings: dict[str, str]) -> bool:
+        participant = self.participant_by_identity.get(identity)
+        if participant is None:
+            return False
+
+        source_lang = settings.get("source_language")
+        target_lang = settings.get("target_language")
+        voice_profile = settings.get("voice_profile")
+
+        if source_lang:
+            participant["source_language"] = source_lang
+        if target_lang:
+            participant["target_language"] = target_lang
+        if voice_profile:
+            participant["voice_profile"] = voice_profile
+
+        self.updated_at = utc_now_iso()
+        self.events.append(
+            SessionEvent(
+                type="participant.state",
+                session_id=self.session_id,
+                room_id=self.room_id,
+                speaker_identity=identity,
+                source_lang=participant.get("source_language"),
+                target_lang=participant.get("target_language"),
+                timestamp=self.updated_at,
+                text="settings_updated",
+                details={
+                    "voice_profile": participant.get("voice_profile", ""),
+                },
+            )
+        )
+        return True
+
     async def process_utterance(self, request: SimulateUtteranceRequest) -> list[SessionEvent]:
         self.updated_at = utc_now_iso()
         utterance_id = request.utterance_id or f"utt_{uuid4()}"

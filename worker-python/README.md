@@ -35,6 +35,7 @@ Environment keys:
 - `GEMINI_TRANSLATE_MODEL=gemini-2.5-flash`
 - `GEMINI_STT_MODEL=gemini-2.5-flash`
 - `GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts`
+- `GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-sa.json` (service-account JSON mounted into container)
 - `OPENAI_API_KEY=` (optional, used as paid fallback)
 - `OPENAI_TRANSLATE_MODEL=gpt-4o-mini`
 - `OPENAI_STT_MODEL=whisper-1`
@@ -42,4 +43,4 @@ Environment keys:
 
 Realtime note:
 
-- LiveKit bridge ingests remote audio frames, segments speech with energy-based VAD, transcribes with Gemini STT (`GEMINI_API_KEY` required), then runs translation pipeline and publishes translated audio (Gemini TTS first, Edge TTS fallback).
+- LiveKit bridge ingests remote audio frames, segments speech with energy-based VAD, transcribes with Google Cloud Speech first (service-account), then Gemini/OpenAI/local fallback. Translation uses `google-first` profile and TTS publishes Google Cloud TTS first, then Gemini/Edge fallback.

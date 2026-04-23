@@ -5,6 +5,18 @@ ALTER TABLE users
 
 DO $$
 BEGIN
+  -- Drop legacy room status constraint first so data can be migrated safely.
+  IF EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'rooms_status_check'
+  ) THEN
+    ALTER TABLE rooms DROP CONSTRAINT rooms_status_check;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
   IF EXISTS (
     SELECT 1
     FROM information_schema.columns
@@ -22,15 +34,27 @@ UPDATE rooms SET status = 'closed' WHERE status = 'ended';
 ALTER TABLE rooms
   ADD COLUMN IF NOT EXISTS room_code TEXT;
 
-WITH generated AS (
-  SELECT room_id, LPAD(((ABS(hashtext(room_id)) % 1000000))::text, 6, '0') AS code
+DO $$
+DECLARE
+  total_rooms BIGINT;
+BEGIN
+  SELECT COUNT(*) INTO total_rooms FROM rooms;
+  IF total_rooms > 1000000 THEN
+    RAISE EXCEPTION 'rooms_count_exceeds_6_digit_code_space: %', total_rooms;
+  END IF;
+END $$;
+
+-- Recompute deterministic unique 6-digit room codes for existing rows.
+WITH ordered AS (
+  SELECT
+    room_id,
+    LPAD((ROW_NUMBER() OVER (ORDER BY created_at, room_id) - 1)::text, 6, '0') AS code
   FROM rooms
-  WHERE room_code IS NULL
 )
 UPDATE rooms r
-SET room_code = g.code
-FROM generated g
-WHERE r.room_id = g.room_id;
+SET room_code = o.code
+FROM ordered o
+WHERE r.room_id = o.room_id;
 
 ALTER TABLE rooms
   ALTER COLUMN room_code SET NOT NULL;
@@ -42,9 +66,9 @@ BEGIN
     FROM pg_constraint
     WHERE conname = 'rooms_status_check_v2'
   ) THEN
-    ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_status_check;
     ALTER TABLE rooms ADD CONSTRAINT rooms_status_check_v2 CHECK (status IN ('waiting', 'active', 'closed'));
   END IF;
 END $$;
 
+DROP INDEX IF EXISTS idx_rooms_room_code_unique;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_room_code_unique ON rooms(room_code);

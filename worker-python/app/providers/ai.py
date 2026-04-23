@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
+import html
 from typing import Any
 
 import httpx
 
 from .base import STTProvider, STTResult, TTSProvider, TTSResult, TranslateProvider, TranslateResult
+from ..services.google_auth import GoogleAccessTokenProvider
 
 
 def _trim_json_text(payload: Any) -> str:
@@ -212,6 +214,59 @@ class GeminiTranslateProvider(TranslateProvider):
             translated_text = _extract_gemini_text(data)
             if not translated_text:
                 raise RuntimeError("gemini_translate_empty_response")
+            return TranslateResult(translated_text=translated_text, provider=self.name)
+
+
+class GoogleCloudTranslateProvider(TranslateProvider):
+    def __init__(
+        self,
+        credentials_path: str,
+        timeout_sec: float = 20.0,
+    ) -> None:
+        self.name = "google_translate"
+        self._timeout_sec = timeout_sec
+        self._token_provider = GoogleAccessTokenProvider(
+            credentials_path=credentials_path,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+
+    async def translate(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        context: list[dict[str, str]],
+    ) -> TranslateResult:
+        if not text.strip():
+            raise RuntimeError("google_translate_empty_input")
+        if not self._token_provider.configured():
+            raise RuntimeError("google_credentials_path_missing")
+
+        token = await self._token_provider.get_token()
+        if not token:
+            raise RuntimeError("google_access_token_missing")
+
+        payload = {
+            "q": text,
+            "source": source_lang,
+            "target": target_lang,
+            "format": "text",
+        }
+        async with httpx.AsyncClient(timeout=self._timeout_sec) as client:
+            response = await client.post(
+                "https://translation.googleapis.com/language/translate/v2",
+                headers={"Authorization": f"Bearer {token}"},
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+            translations = data.get("data", {}).get("translations", [])
+            if not isinstance(translations, list) or not translations:
+                raise RuntimeError("google_translate_empty_response")
+            translated_text = str(translations[0].get("translatedText", "")).strip()
+            translated_text = html.unescape(translated_text)
+            if not translated_text:
+                raise RuntimeError("google_translate_empty_response")
             return TranslateResult(translated_text=translated_text, provider=self.name)
 
 

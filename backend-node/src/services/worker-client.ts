@@ -64,3 +64,27 @@ export async function stopWorkerSession(sessionId: string, reason: string): Prom
     throw new Error(`worker_stop_failed:${response.status}:${JSON.stringify(body)}`);
   }
 }
+
+export async function updateWorkerParticipantSettings(input: {
+  sessionId: string;
+  participantIdentity: string;
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  voiceProfile?: string;
+}): Promise<void> {
+  const url = `${env.WORKER_INTERNAL_URL}/internal/sessions/${input.sessionId}/participants/${encodeURIComponent(input.participantIdentity)}/settings`;
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      source_language: input.sourceLanguage,
+      target_language: input.targetLanguage,
+      voice_profile: input.voiceProfile
+    })
+  });
+
+  if (!response.ok) {
+    const body = await parseSafeJson(response);
+    throw new Error(`worker_settings_failed:${response.status}:${JSON.stringify(body)}`);
+  }
+}
