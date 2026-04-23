@@ -1,11 +1,12 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { hashPassword, verifyPassword } from "../services/password.js";
 import { signHs256 } from "../services/jwt.js";
 import { createLivekitToken } from "../services/livekit-token.js";
 import { persistence } from "../services/persistence.js";
-import { startWorkerSession, stopWorkerSession } from "../services/worker-client.js";
+import { startWorkerSession, stopWorkerSession, updateWorkerParticipantSettings } from "../services/worker-client.js";
 import { ERROR_CODES, sendError } from "../types/api-error.js";
 import type { ParticipantSettings } from "../types/domain.js";
 import type { HistoryItem, WorkerEventPayload } from "../types/worker-event.js";
@@ -136,6 +137,7 @@ function issueJwt(userId: string, role: "guest" | "registered") {
     {
       sub: userId,
       role,
+      jti: randomUUID(),
       iat: now,
       exp: now + 60 * 60 * 24 * 7
     },
@@ -472,12 +474,65 @@ v1Router.post("/rooms/:roomId/end", async (req, res) => {
   }
 });
 
+v1Router.post("/rooms/:roomId/participants/:participantId/leave", async (req, res) => {
+  const roomId = z.string().min(1).parse(req.params.roomId);
+  const participantId = z.string().min(1).parse(req.params.participantId);
+  try {
+    const { room, participant } = await persistence.leaveParticipant(roomId, participantId);
+    const warnings: string[] = [];
+    await stopWorkerSession(room.sessionId, "guest_left").catch((error) => {
+      const message = error instanceof Error ? error.message : "worker_stop_failed";
+      warnings.push(message);
+      console.warn(`[room:leave] worker stop failed for ${room.sessionId}: ${message}`);
+    });
+    res.status(200).json({
+      room,
+      room_short_code: room.roomCode,
+      participant,
+      worker_session: {
+        session_id: room.sessionId,
+        state: warnings.length ? "stop_failed_best_effort" : "stopped"
+      },
+      warnings
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "participant_leave_failed";
+    if (message === "room_not_found") {
+      sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
+      return;
+    }
+    if (message === "participant_not_found") {
+      sendError(res, 404, ERROR_CODES.PARTICIPANT_NOT_FOUND, "Participant was not found");
+      return;
+    }
+    if (message === "room_ended") {
+      sendError(res, 409, ERROR_CODES.ROOM_ENDED, "Room has already ended");
+      return;
+    }
+    if (message === "host_must_end_room") {
+      sendError(res, 409, ERROR_CODES.VALIDATION_ERROR, "Host must end the room instead of leaving");
+      return;
+    }
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Leave room failed", message);
+  }
+});
+
 v1Router.patch("/rooms/:roomId/participants/:participantId/settings", async (req, res) => {
   const roomId = z.string().min(1).parse(req.params.roomId);
   const participantId = z.string().min(1).parse(req.params.participantId);
   const payload = patchSettingsSchema.parse(req.body);
   try {
     const participant = await persistence.updateParticipantSettings(roomId, participantId, payload);
+    const room = await persistence.getRoom(roomId);
+    if (room) {
+      await updateWorkerParticipantSettings({
+        sessionId: room.sessionId,
+        participantIdentity: participant.identity,
+        sourceLanguage: payload.source_language,
+        targetLanguage: payload.target_language,
+        voiceProfile: payload.voice_profile
+      }).catch(() => undefined);
+    }
     res.status(200).json({ participant });
   } catch (error) {
     const message = error instanceof Error ? error.message : "settings_update_failed";

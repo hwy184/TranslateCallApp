@@ -19,6 +19,7 @@ import numpy as np
 from ..config.settings import Settings
 from ..sessions.models import SessionEvent, SimulateUtteranceRequest
 from ..sessions.room_pipeline_session import RoomPipelineSession
+from .google_auth import GoogleAccessTokenProvider
 
 logger = logging.getLogger("worker.livekit-bridge")
 
@@ -52,6 +53,7 @@ class LiveKitRoomContext:
     consumed_track_ids: set[str]
     last_stt_at_by_speaker: dict[str, float]
     last_transcript_by_speaker: dict[str, tuple[str, float]]
+    echo_suppress_until_by_speaker: dict[str, float]
 
 
 class LiveKitBridge:
@@ -70,6 +72,12 @@ class LiveKitBridge:
         self._gemini_tts_model = settings.gemini_tts_model
         self._openai_api_key = settings.openai_api_key
         self._openai_stt_model = settings.openai_stt_model
+        self._google_credentials_path = settings.google_application_credentials
+        self._google_translate_location = settings.google_translate_location
+        self._google_token_provider = GoogleAccessTokenProvider(
+            credentials_path=self._google_credentials_path,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
         self._stt_energy_threshold = settings.stt_energy_threshold
         self._stt_min_speech_ms = settings.stt_min_speech_ms
         self._stt_min_voiced_ms = settings.stt_min_voiced_ms
@@ -91,6 +99,8 @@ class LiveKitBridge:
         self._gemini_tts_blocked_until: float = 0.0
 
         self._utterance_handler: Callable[[str, SimulateUtteranceRequest], Awaitable[None]] | None = None
+        if self._google_token_provider.configured():
+            logger.info("livekit_bridge_google_cloud_enabled")
         if self._local_stt_enabled and WhisperModel is None:
             logger.warning("livekit_bridge_local_stt_unavailable_missing_dependency")
 
@@ -119,9 +129,9 @@ class LiveKitBridge:
                 api.VideoGrants(
                     room_join=True,
                     room=session.room_id,
+                    can_publish=True,
                     can_publish_data=True,
                     can_subscribe=True,
-                    hidden=True,
                     agent=True,
                 )
             )
@@ -142,6 +152,7 @@ class LiveKitBridge:
             consumed_track_ids=set(),
             last_stt_at_by_speaker={},
             last_transcript_by_speaker={},
+            echo_suppress_until_by_speaker={},
         )
         self._active_sessions[session.session_id] = context
 
@@ -328,18 +339,17 @@ class LiveKitBridge:
                 payload = json.dumps(event.model_dump(exclude_none=True), ensure_ascii=True)
                 details = event.details if isinstance(event.details, dict) else {}
                 destination = details.get("target_identity")
-                destination_identities = [destination] if isinstance(destination, str) and destination else []
+                target_identity = destination if isinstance(destination, str) and destination else None
                 await context.room.local_participant.publish_data(
                     payload,
                     reliable=True,
-                    destination_identities=destination_identities,
                     topic="translation.events",
                 )
 
-                if event.type == "translation.final" and event.translated_text and destination_identities:
+                if event.type == "translation.final" and event.translated_text and target_identity:
                     await self._publish_translated_audio(
                         context=context,
-                        target_identity=destination_identities[0],
+                        target_identity=target_identity,
                         translated_text=event.translated_text,
                     )
             except Exception as exc:  # noqa: BLE001
@@ -372,15 +382,27 @@ class LiveKitBridge:
             return
 
         tts_provider = "none"
-        pcm = await self._synthesize_gemini_tts_pcm(translated_text)
+        target_lang_hint = self._resolve_target_lang_hint(context, target_identity)
+        pcm = await self._synthesize_google_tts_pcm(translated_text, target_lang_hint)
+        if pcm:
+            tts_provider = "google_tts"
+        else:
+            pcm = await self._synthesize_gemini_tts_pcm(translated_text)
+            if pcm:
+                tts_provider = "gemini_tts"
         if not pcm:
             voice = self._resolve_target_voice(context, target_identity)
             pcm = await self._synthesize_edge_tts_pcm(translated_text, voice)
             if pcm:
                 tts_provider = "edge_tts"
-        else:
-            tts_provider = "gemini_tts"
         if pcm:
+            duration_sec = len(pcm) / max(1, (2 * self._tts_sample_rate * self._tts_channels))
+            # Suppress STT from the listener briefly while TTS is playing
+            # to reduce translation-feedback loops caused by speaker bleed.
+            suppress_window_sec = min(4.0, max(0.8, duration_sec + 0.35))
+            now = asyncio.get_running_loop().time()
+            prev = context.echo_suppress_until_by_speaker.get(target_identity, 0.0)
+            context.echo_suppress_until_by_speaker[target_identity] = max(prev, now + suppress_window_sec)
             logger.info(
                 "livekit_bridge_tts_pcm_ready session=%s target=%s provider=%s text_len=%s pcm_bytes=%s",
                 context.session_id,
@@ -403,6 +425,20 @@ class LiveKitBridge:
             extra={"session_id": context.session_id, "target_identity": target_identity},
         )
 
+    def _resolve_source_lang_hint(self, context: LiveKitRoomContext, speaker_identity: str) -> str | None:
+        participant = context.session.participant_by_identity.get(speaker_identity, {})
+        source_lang = participant.get("source_language") if participant else None
+        if isinstance(source_lang, str) and source_lang:
+            return source_lang
+        return None
+
+    def _resolve_target_lang_hint(self, context: LiveKitRoomContext, target_identity: str) -> str | None:
+        participant = context.session.participant_by_identity.get(target_identity, {})
+        source_lang = participant.get("source_language") if participant else None
+        if isinstance(source_lang, str) and source_lang:
+            return source_lang
+        return None
+
     async def _consume_remote_audio(self, context: LiveKitRoomContext, speaker_identity: str, track: object) -> None:
         if rtc is None:
             return
@@ -422,9 +458,6 @@ class LiveKitBridge:
         frame_count = 0
         peak_rms = 0
         segment_peak_rms = 0
-
-        participant = context.session.participant_by_identity.get(speaker_identity, {})
-        source_lang_hint = participant.get("source_language") if participant else None
 
         try:
             async for event in stream:
@@ -448,6 +481,18 @@ class LiveKitBridge:
                 peak_rms = max(peak_rms, rms)
                 segment_peak_rms = max(segment_peak_rms, rms)
                 voiced = rms >= self._stt_energy_threshold
+
+                now = asyncio.get_running_loop().time()
+                suppressed_until = context.echo_suppress_until_by_speaker.get(speaker_identity, 0.0)
+                if now < suppressed_until:
+                    if in_speech or buffer:
+                        in_speech = False
+                        silence_ms = 0
+                        speech_ms = 0
+                        voiced_ms = 0
+                        buffer.clear()
+                        segment_peak_rms = 0
+                    continue
 
                 if voiced:
                     in_speech = True
@@ -489,6 +534,7 @@ class LiveKitBridge:
                         and segment_voiced_ms >= self._stt_force_segment_min_voiced_ms
                     )
                     if accept_normal or accept_peak_force:
+                        source_lang_hint = self._resolve_source_lang_hint(context, speaker_identity)
                         logger.info(
                             "livekit_bridge_vad_segment_accepted session=%s participant=%s speech_ms=%s voiced_ms=%s voiced_ratio=%.2f peak_rms=%s mode=%s",
                             context.session_id,
@@ -562,6 +608,7 @@ class LiveKitBridge:
                 and voiced_ms >= self._stt_force_segment_min_voiced_ms
             )
             if final_accept_normal or final_accept_peak_force:
+                source_lang_hint = self._resolve_source_lang_hint(context, speaker_identity)
                 logger.info(
                     "livekit_bridge_vad_tail_accepted session=%s participant=%s speech_ms=%s voiced_ms=%s voiced_ratio=%.2f peak_rms=%s mode=%s",
                     context.session_id,
@@ -595,6 +642,9 @@ class LiveKitBridge:
         source_lang_hint: str | None,
     ) -> None:
         now = asyncio.get_running_loop().time()
+        suppressed_until = context.echo_suppress_until_by_speaker.get(speaker_identity, 0.0)
+        if now < suppressed_until:
+            return
         prev = context.last_stt_at_by_speaker.get(speaker_identity, 0.0)
         min_interval = self._stt_min_request_interval_ms / 1000.0
         if min_interval > 0 and (now - prev) < min_interval:
@@ -603,6 +653,15 @@ class LiveKitBridge:
 
         text = await self._transcribe_speech(pcm16=pcm16, sample_rate=sample_rate, language=source_lang_hint)
         if not text:
+            duration_ms = int((len(pcm16) // 2) * 1000 / max(1, sample_rate))
+            logger.info(
+                "livekit_bridge_stt_empty session=%s speaker=%s duration_ms=%s sample_rate=%s lang_hint=%s",
+                context.session_id,
+                speaker_identity,
+                duration_ms,
+                sample_rate,
+                source_lang_hint or "",
+            )
             return
         logger.info(
             "livekit_bridge_stt_text speaker=%s text=%s",
@@ -762,7 +821,77 @@ class LiveKitBridge:
             logger.warning("livekit_bridge_openai_stt_failed error=%s", str(exc))
             return ""
 
+    def _resolve_google_speech_language_code(self, language: str | None) -> str:
+        normalized = (language or "").strip().lower()
+        if normalized in {"vi", "vi-vn"}:
+            return "vi-VN"
+        if normalized in {"en", "en-us", "en-gb"}:
+            return "en-US"
+        return "en-US"
+
+    async def _transcribe_google_pcm16(self, *, pcm16: bytes, sample_rate: int, language: str | None) -> str:
+        if not self._google_token_provider.configured():
+            return ""
+        try:
+            token = await self._google_token_provider.get_token()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("livekit_bridge_google_stt_token_failed error=%s", str(exc))
+            return ""
+        if not token:
+            return ""
+
+        request_payload = {
+            "config": {
+                "encoding": "LINEAR16",
+                "sampleRateHertz": sample_rate,
+                "languageCode": self._resolve_google_speech_language_code(language),
+                "enableAutomaticPunctuation": True,
+                "model": "latest_short",
+            },
+            "audio": {"content": base64.b64encode(pcm16).decode("ascii")},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                response = await client.post(
+                    "https://speech.googleapis.com/v1/speech:recognize",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=request_payload,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                results = payload.get("results", [])
+                transcripts: list[str] = []
+                if isinstance(results, list):
+                    for result in results:
+                        alternatives = result.get("alternatives", []) if isinstance(result, dict) else []
+                        if not isinstance(alternatives, list) or not alternatives:
+                            continue
+                        top = alternatives[0]
+                        transcript = str(top.get("transcript", "")).strip() if isinstance(top, dict) else ""
+                        if transcript:
+                            transcripts.append(transcript)
+                return " ".join(transcripts).strip()
+        except httpx.HTTPStatusError as exc:
+            body = ""
+            try:
+                body = exc.response.text[:1200]
+            except Exception:  # noqa: BLE001
+                body = ""
+            logger.warning("livekit_bridge_google_stt_failed status=%s body=%s", exc.response.status_code, body)
+            return ""
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("livekit_bridge_google_stt_failed error=%s", str(exc))
+            return ""
+
     async def _transcribe_speech(self, *, pcm16: bytes, sample_rate: int, language: str | None) -> str:
+        google_text = await self._transcribe_google_pcm16(
+            pcm16=pcm16,
+            sample_rate=sample_rate,
+            language=language,
+        )
+        if google_text:
+            return google_text
+
         gemini_text = await self._transcribe_gemini_pcm16(
             pcm16=pcm16,
             sample_rate=sample_rate,
@@ -962,6 +1091,71 @@ class LiveKitBridge:
         except Exception as exc:  # noqa: BLE001
             logger.warning("livekit_bridge_gemini_tts_failed", extra={"error": str(exc)})
         return None
+
+    def _resolve_google_tts_language_code(self, language: str | None) -> str:
+        normalized = (language or "").strip().lower()
+        if normalized in {"vi", "vi-vn"}:
+            return "vi-VN"
+        if normalized in {"en", "en-us", "en-gb"}:
+            return "en-US"
+        return "en-US"
+
+    def _decode_linear16_wav_or_raw(self, payload: bytes) -> bytes:
+        try:
+            with io.BytesIO(payload) as buf:
+                with wave.open(buf, "rb") as wav_file:
+                    return wav_file.readframes(wav_file.getnframes())
+        except Exception:  # noqa: BLE001
+            return payload
+
+    async def _synthesize_google_tts_pcm(self, text: str, language: str | None) -> bytes | None:
+        if not self._google_token_provider.configured():
+            return None
+        if not text.strip():
+            return None
+        try:
+            token = await self._google_token_provider.get_token()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("livekit_bridge_google_tts_token_failed error=%s", str(exc))
+            return None
+        if not token:
+            return None
+
+        language_code = self._resolve_google_tts_language_code(language)
+        payload = {
+            "input": {"text": text},
+            "voice": {"languageCode": language_code},
+            "audioConfig": {
+                "audioEncoding": "LINEAR16",
+                "sampleRateHertz": self._tts_sample_rate,
+            },
+        }
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                response = await client.post(
+                    "https://texttospeech.googleapis.com/v1/text:synthesize",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+                audio_content = str(data.get("audioContent", "")).strip()
+                if not audio_content:
+                    return None
+                decoded = base64.b64decode(audio_content)
+                pcm = self._decode_linear16_wav_or_raw(decoded)
+                return pcm if pcm else None
+        except httpx.HTTPStatusError as exc:
+            body = ""
+            try:
+                body = exc.response.text[:1200]
+            except Exception:  # noqa: BLE001
+                body = ""
+            logger.warning("livekit_bridge_google_tts_failed status=%s body=%s", exc.response.status_code, body)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("livekit_bridge_google_tts_failed error=%s", str(exc))
+            return None
 
     async def _publish_pcm(self, source: object, pcm16: bytes, sample_rate: int, channels: int) -> None:
         if rtc is None:

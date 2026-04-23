@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from .models import SessionState, StartSessionRequest, SimulateUtteranceRequest
+from .models import SessionState, StartSessionRequest, SimulateUtteranceRequest, UpdateParticipantSettingsRequest
 from .room_pipeline_session import RoomPipelineSession
 from ..config.settings import get_settings
 from ..providers.registry import ProviderRegistry
@@ -99,6 +99,25 @@ class SessionManager:
             if session is None:
                 return None
             return session.list_events()
+
+    async def update_participant_settings(
+        self,
+        session_id: str,
+        identity: str,
+        payload: UpdateParticipantSettingsRequest,
+    ) -> bool | None:
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return None
+            return session.update_participant_settings(
+                identity,
+                {
+                    "source_language": payload.source_language or "",
+                    "target_language": payload.target_language or "",
+                    "voice_profile": payload.voice_profile or "",
+                },
+            )
 
     def _to_state(self, session: RoomPipelineSession) -> SessionState:
         return SessionState(

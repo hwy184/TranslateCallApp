@@ -32,6 +32,10 @@ pnpm-debug.log*
 # env files
 .env
 .env.*
+secrets/
+secrets/*.json
+gen-lang-client-*.json
+*service-account*.json
 
 # IDE / OS
 .DS_Store

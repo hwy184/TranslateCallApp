@@ -19,6 +19,11 @@ class StartSessionRequest(BaseModel):
 class StopSessionRequest(BaseModel):
     reason: str = Field(default="backend_request")
 
+class UpdateParticipantSettingsRequest(BaseModel):
+    source_language: str | None = Field(default=None, min_length=2)
+    target_language: str | None = Field(default=None, min_length=2)
+    voice_profile: str | None = Field(default=None, min_length=1)
+
 
 class SessionState(BaseModel):
     session_id: str

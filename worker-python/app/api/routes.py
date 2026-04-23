@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from ..sessions.manager import SessionManager
-from ..sessions.models import SessionState, SimulateUtteranceRequest, StartSessionRequest, StopSessionRequest
+from ..sessions.models import SessionState, SimulateUtteranceRequest, StartSessionRequest, StopSessionRequest, UpdateParticipantSettingsRequest
 
 
 def build_router(session_manager: SessionManager) -> APIRouter:
@@ -52,5 +52,14 @@ def build_router(session_manager: SessionManager) -> APIRouter:
         if events is None:
             raise HTTPException(status_code=404, detail="session_not_found")
         return {"items": [event.model_dump() for event in events]}
+
+    @router.patch("/internal/sessions/{session_id}/participants/{identity}/settings")
+    async def update_participant_settings(session_id: str, identity: str, payload: UpdateParticipantSettingsRequest):
+        updated = await session_manager.update_participant_settings(session_id, identity, payload)
+        if updated is None:
+            raise HTTPException(status_code=404, detail="session_not_found")
+        if not updated:
+            raise HTTPException(status_code=404, detail="participant_not_found")
+        return {"updated": True}
 
     return router

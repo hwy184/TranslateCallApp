@@ -160,15 +160,17 @@ export const persistence = {
       await ensureUser(client, input.hostUserId, "registered", input.hostIdentity);
 
       let roomCode = "";
+      let codeReady = false;
       for (let attempt = 0; attempt < 20; attempt += 1) {
         roomCode = generateRoomCode();
         const exists = await client.query("SELECT 1 FROM rooms WHERE room_code = $1 LIMIT 1", [roomCode]);
         if ((exists.rowCount ?? 0) === 0) {
+          codeReady = true;
           break;
         }
       }
 
-      if (!roomCode) {
+      if (!codeReady) {
         throw new Error("room_code_generation_failed");
       }
 
@@ -328,6 +330,60 @@ export const persistence = {
     });
   },
 
+  async leaveParticipant(roomId: string, participantId: string): Promise<{ room: Room; participant: Participant }> {
+    return withTransaction(async (client) => {
+      const roomRow = await client.query(
+        `
+          SELECT room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+          FROM rooms
+          WHERE room_id = $1
+          FOR UPDATE
+        `,
+        [roomId]
+      );
+      if ((roomRow.rowCount ?? 0) === 0) {
+        throw new Error("room_not_found");
+      }
+
+      const current = mapRoom(roomRow.rows[0]);
+      if (current.status === "closed") {
+        throw new Error("room_ended");
+      }
+
+      const participantRow = await client.query(
+        `
+          SELECT participant_id, identity, role, user_id, settings, joined_at
+          FROM participants
+          WHERE room_id = $1 AND participant_id = $2
+        `,
+        [roomId, participantId]
+      );
+      if ((participantRow.rowCount ?? 0) === 0) {
+        throw new Error("participant_not_found");
+      }
+
+      const participant = mapParticipant(participantRow.rows[0]);
+      if (participant.role === "host") {
+        throw new Error("host_must_end_room");
+      }
+
+      const updatedRoomRow = await client.query(
+        `
+          UPDATE rooms
+          SET guest_participant_id = NULL, status = 'waiting'
+          WHERE room_id = $1
+          RETURNING room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+        `,
+        [roomId]
+      );
+
+      return {
+        room: mapRoom(updatedRoomRow.rows[0]),
+        participant
+      };
+    });
+  },
+
   async updateParticipantSettings(
     roomId: string,
     participantId: string,
@@ -370,21 +426,25 @@ export const persistence = {
   },
 
   async recordWorkerEvent(event: WorkerEventPayload): Promise<void> {
-    await withTransaction(async (client) => {
-      await client.query("INSERT INTO worker_events(payload) VALUES ($1::jsonb)", [JSON.stringify(event)]);
+    await pool.query("INSERT INTO worker_events(payload) VALUES ($1::jsonb)", [JSON.stringify(event)]);
 
-      const isTranscriptEvent = event.type === "subtitle.final" || event.type === "translation.final" || event.type === "warning" || event.type === "error";
-      const hasTranscriptKeys =
-        typeof event.utterance_id === "string" &&
-        typeof event.speaker_identity === "string" &&
-        typeof event.source_lang === "string" &&
-        typeof event.target_lang === "string";
+    const isTranscriptEvent =
+      event.type === "subtitle.final" ||
+      event.type === "translation.final" ||
+      event.type === "warning" ||
+      event.type === "error";
+    const hasTranscriptKeys =
+      typeof event.utterance_id === "string" &&
+      typeof event.speaker_identity === "string" &&
+      typeof event.source_lang === "string" &&
+      typeof event.target_lang === "string";
 
-      if (!isTranscriptEvent || !hasTranscriptKeys) {
-        return;
-      }
+    if (!isTranscriptEvent || !hasTranscriptKeys) {
+      return;
+    }
 
-      await client.query(
+    try {
+      await pool.query(
         `
           INSERT INTO transcript_items(
             room_id, session_id, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type
@@ -403,7 +463,10 @@ export const persistence = {
           event.type
         ]
       );
-    });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[worker:event] transcript_insert_skipped room=${event.room_id} session=${event.session_id} reason=${message}`);
+    }
   },
 
   async listWorkerEvents(limit = 100): Promise<Array<Record<string, unknown>>> {

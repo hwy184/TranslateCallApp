@@ -8,6 +8,7 @@ from .ai import (
     EdgeRefTTSProvider,
     GeminiTextSTTProvider,
     GeminiTranslateProvider,
+    GoogleCloudTranslateProvider,
     OllamaTranslateProvider,
     OpenAITextSTTProvider,
     OpenAITranslateProvider,
@@ -37,6 +38,9 @@ class ProviderRegistry:
             "gemini_stt": GeminiTextSTTProvider(),
         }
         self._translate_catalog = {
+            "google_translate": GoogleCloudTranslateProvider(
+                credentials_path=settings.google_application_credentials,
+            ),
             "gemini_translate": GeminiTranslateProvider(
                 api_key=settings.gemini_api_key,
                 model=settings.gemini_translate_model,
@@ -92,7 +96,7 @@ class ProviderRegistry:
             "google-first": {
                 "vad": ["silero"],
                 "stt": ["google_stt", "openai_stt", "whisper_local"],
-                "translate": ["openai_translate", "gemini_translate", "rule_translate"],
+                "translate": ["google_translate", "gemini_translate", "openai_translate", "rule_translate"],
                 "tts": ["google_tts", "edge_tts", "mock_tts"],
             },
         }
