@@ -46,5 +46,11 @@ Thumbs.db
 coverage/
 *.lcov
 
-readme
-readme/legacy
+readme/*
+!readme/PLANNING.md
+!readme/TASKS.md
+!readme/DEMO_AND_METRICS_CHECKLIST.md
+!readme/MVP_TEST_CASES.md
+!readme/DEPLOY_TEST_README.md
+!readme/legacy/
+!readme/legacy/**

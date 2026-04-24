@@ -303,11 +303,12 @@ export const persistence = {
         }
         try {
             await pool.query(`
-          INSERT INTO transcript_items(
-            room_id, session_id, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        `, [
+            INSERT INTO transcript_items(
+              room_id, session_id, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (session_id, utterance_id, event_type) DO NOTHING
+          `, [
                 event.room_id,
                 event.session_id,
                 event.utterance_id,
@@ -406,6 +407,7 @@ export const persistence = {
               room_id, session_id, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type, created_at
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, NOW()))
+            ON CONFLICT (session_id, utterance_id, event_type) DO NOTHING
           `, [
                     item.room_id,
                     item.session_id,

@@ -103,6 +103,18 @@ class LiveKitBridge:
             logger.info("livekit_bridge_google_cloud_enabled")
         if self._local_stt_enabled and WhisperModel is None:
             logger.warning("livekit_bridge_local_stt_unavailable_missing_dependency")
+        logger.info(
+            "livekit_bridge_vad_config energy_threshold=%s min_speech_ms=%s min_voiced_ms=%s min_voiced_ratio=%s silence_hangover_ms=%s min_request_interval_ms=%s duplicate_window_ms=%s force_peak_rms=%s force_min_voiced_ms=%s",
+            self._stt_energy_threshold,
+            self._stt_min_speech_ms,
+            self._stt_min_voiced_ms,
+            self._stt_min_voiced_ratio,
+            self._stt_silence_hangover_ms,
+            self._stt_min_request_interval_ms,
+            self._stt_duplicate_suppress_window_ms,
+            self._stt_force_segment_peak_rms,
+            self._stt_force_segment_min_voiced_ms,
+        )
 
     def set_utterance_handler(
         self,

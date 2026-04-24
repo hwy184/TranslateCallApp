@@ -9,6 +9,7 @@ import { persistence } from "../services/persistence.js";
 import { startWorkerSession, stopWorkerSession, updateWorkerParticipantSettings } from "../services/worker-client.js";
 import { ERROR_CODES, sendError } from "../types/api-error.js";
 const v1Router = Router();
+const ROOM_LOCK_WINDOW_MS = env.ROOM_LOCK_MINUTES * 60 * 1000;
 const defaultSettingsSchema = z.object({
     source_language: z.enum(["vi", "en"]).default("vi"),
     target_language: z.enum(["vi", "en"]).default("en"),
@@ -146,6 +147,29 @@ function roomMetadata(sessionId, providerProfile, supportedLanguages) {
         provider_profile: providerProfile
     };
 }
+v1Router.get("/client/config", (_req, res) => {
+    res.status(200).json({
+        api_version: "v1",
+        supported_languages: ["vi", "en"],
+        room_lock_minutes: env.ROOM_LOCK_MINUTES,
+        livekit_url: env.LIVEKIT_URL || null
+    });
+});
+function isRoomExpired(room) {
+    if (room.status === "closed")
+        return false;
+    const createdAtMs = Date.parse(room.createdAt);
+    if (!Number.isFinite(createdAtMs))
+        return false;
+    return Date.now() - createdAtMs >= ROOM_LOCK_WINDOW_MS;
+}
+async function closeRoomIfExpired(room) {
+    if (!isRoomExpired(room))
+        return room;
+    const closedRoom = await persistence.endRoom(room.roomId);
+    await stopWorkerSession(closedRoom.sessionId, "room_timeout").catch(() => undefined);
+    return closedRoom;
+}
 v1Router.post("/auth/guest", async (req, res) => {
     try {
         const payload = authGuestSchema.parse(req.body);
@@ -277,11 +301,12 @@ v1Router.post("/rooms", async (req, res) => {
 v1Router.post("/rooms/join", async (req, res) => {
     const payload = roomJoinSchema.parse(req.body);
     try {
-        const room = await persistence.getRoom(payload.room_id);
-        if (!room) {
+        const roomBeforeLock = await persistence.getRoom(payload.room_id);
+        if (!roomBeforeLock) {
             sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
             return;
         }
+        const room = await closeRoomIfExpired(roomBeforeLock);
         if (room.status === "closed") {
             sendError(res, 409, ERROR_CODES.ROOM_ENDED, "Room has already ended");
             return;
@@ -311,21 +336,31 @@ v1Router.post("/rooms/join", async (req, res) => {
                 voice_profile: payload.guest_settings.voice_profile
             }
         ];
-        await startWorkerSession({
-            sessionId: room.sessionId,
-            roomId: room.roomId,
-            providerProfile: room.providerProfile,
-            roomMetadata: {
-                mode: "bidirectional",
-                audio_mode: "translated_only",
-                supported_languages: room.supportedLanguages,
-                provider_profile: room.providerProfile
-            },
-            participants: participantsPayload,
-            livekit: {
-                worker_identity: `ai_worker_${room.sessionId.slice(0, 8)}`
-            }
-        });
+        const warnings = [];
+        let workerSessionState = "started";
+        try {
+            await startWorkerSession({
+                sessionId: room.sessionId,
+                roomId: room.roomId,
+                providerProfile: room.providerProfile,
+                roomMetadata: {
+                    mode: "bidirectional",
+                    audio_mode: "translated_only",
+                    supported_languages: room.supportedLanguages,
+                    provider_profile: room.providerProfile
+                },
+                participants: participantsPayload,
+                livekit: {
+                    worker_identity: `ai_worker_${room.sessionId.slice(0, 8)}`
+                }
+            });
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : "worker_start_failed";
+            warnings.push(message);
+            workerSessionState = "start_failed_best_effort";
+            console.warn(`[room:join] worker start failed for ${room.sessionId}: ${message}`);
+        }
         let joined;
         try {
             joined = await persistence.joinRoom({
@@ -336,7 +371,9 @@ v1Router.post("/rooms/join", async (req, res) => {
             });
         }
         catch (joinError) {
-            await stopWorkerSession(room.sessionId, "join_commit_failed").catch(() => undefined);
+            if (workerSessionState === "started") {
+                await stopWorkerSession(room.sessionId, "join_commit_failed").catch(() => undefined);
+            }
             throw joinError;
         }
         const roomMeta = roomMetadata(joined.room.sessionId, joined.room.providerProfile, joined.room.supportedLanguages);
@@ -357,9 +394,10 @@ v1Router.post("/rooms/join", async (req, res) => {
             },
             worker_session: {
                 session_id: joined.room.sessionId,
-                state: "started",
+                state: workerSessionState,
                 participants: participantsPayload.length
             },
+            warnings,
             livekit: {
                 room_name: joined.room.roomId,
                 token: livekitToken,
@@ -388,9 +426,14 @@ v1Router.post("/rooms/join", async (req, res) => {
 v1Router.get("/rooms/resolve/:code", async (req, res) => {
     const code = z.string().regex(/^\d{6}$/).parse(req.params.code.trim());
     try {
-        const room = await persistence.getRoomByShortCode(code);
-        if (!room) {
+        const roomBeforeLock = await persistence.getRoomByShortCode(code);
+        if (!roomBeforeLock) {
             sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
+            return;
+        }
+        const room = await closeRoomIfExpired(roomBeforeLock);
+        if (room.status === "closed") {
+            sendError(res, 409, ERROR_CODES.ROOM_ENDED, "Room has already ended");
             return;
         }
         res.status(200).json({ room, room_short_code: room.roomCode });
@@ -403,11 +446,12 @@ v1Router.get("/rooms/resolve/:code", async (req, res) => {
 v1Router.get("/rooms/:roomId/status", async (req, res) => {
     const roomId = z.string().min(1).parse(req.params.roomId);
     try {
-        const room = await persistence.getRoom(roomId);
-        if (!room) {
+        const roomBeforeLock = await persistence.getRoom(roomId);
+        if (!roomBeforeLock) {
             sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
             return;
         }
+        const room = await closeRoomIfExpired(roomBeforeLock);
         res.status(200).json({ room, room_short_code: room.roomCode });
     }
     catch (error) {
@@ -448,21 +492,15 @@ v1Router.post("/rooms/:roomId/participants/:participantId/leave", async (req, re
     const participantId = z.string().min(1).parse(req.params.participantId);
     try {
         const { room, participant } = await persistence.leaveParticipant(roomId, participantId);
-        const warnings = [];
-        await stopWorkerSession(room.sessionId, "guest_left").catch((error) => {
-            const message = error instanceof Error ? error.message : "worker_stop_failed";
-            warnings.push(message);
-            console.warn(`[room:leave] worker stop failed for ${room.sessionId}: ${message}`);
-        });
         res.status(200).json({
             room,
             room_short_code: room.roomCode,
             participant,
             worker_session: {
                 session_id: room.sessionId,
-                state: warnings.length ? "stop_failed_best_effort" : "stopped"
+                state: "room_remains_active"
             },
-            warnings
+            warnings: []
         });
     }
     catch (error) {
@@ -491,17 +529,24 @@ v1Router.patch("/rooms/:roomId/participants/:participantId/settings", async (req
     const participantId = z.string().min(1).parse(req.params.participantId);
     const payload = patchSettingsSchema.parse(req.body);
     try {
-        const participant = await persistence.updateParticipantSettings(roomId, participantId, payload);
-        const room = await persistence.getRoom(roomId);
-        if (room) {
-            await updateWorkerParticipantSettings({
-                sessionId: room.sessionId,
-                participantIdentity: participant.identity,
-                sourceLanguage: payload.source_language,
-                targetLanguage: payload.target_language,
-                voiceProfile: payload.voice_profile
-            }).catch(() => undefined);
+        const roomBeforeLock = await persistence.getRoom(roomId);
+        if (!roomBeforeLock) {
+            sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
+            return;
         }
+        const room = await closeRoomIfExpired(roomBeforeLock);
+        if (room.status === "closed") {
+            sendError(res, 409, ERROR_CODES.ROOM_ENDED, "Room has already ended");
+            return;
+        }
+        const participant = await persistence.updateParticipantSettings(roomId, participantId, payload);
+        await updateWorkerParticipantSettings({
+            sessionId: room.sessionId,
+            participantIdentity: participant.identity,
+            sourceLanguage: payload.source_language,
+            targetLanguage: payload.target_language,
+            voiceProfile: payload.voice_profile
+        }).catch(() => undefined);
         res.status(200).json({ participant });
     }
     catch (error) {
