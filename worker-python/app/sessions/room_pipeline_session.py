@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timezone
+from time import perf_counter
 from uuid import uuid4
 
 from .models import SessionEvent, SimulateUtteranceRequest
@@ -124,6 +125,7 @@ class RoomPipelineSession:
     async def process_utterance(self, request: SimulateUtteranceRequest) -> list[SessionEvent]:
         self.updated_at = utc_now_iso()
         utterance_id = request.utterance_id or f"utt_{uuid4()}"
+        started_at = perf_counter()
         speaker_profile = self.participant_by_identity.get(request.speaker_identity, {})
         resolved_source_lang = request.source_lang or speaker_profile.get("source_language") or "vi"
         resolved_target_identity = self._resolve_target_identity(
@@ -143,13 +145,16 @@ class RoomPipelineSession:
         key = (request.speaker_identity, resolved_target_identity)
         context = self.context_map.setdefault(key, deque(maxlen=self.context_window))
         result_events: list[SessionEvent] = []
+        stage_timings_ms: dict[str, int] = {}
 
         try:
+            stt_started_at = perf_counter()
             stt_result, stt_warnings = await run_with_fallback(
                 stage="stt",
                 providers=self.provider_bundle.stt_chain,
                 invoke=lambda provider: provider.transcribe(request.text, resolved_source_lang),
             )
+            stage_timings_ms["stt"] = int((perf_counter() - stt_started_at) * 1000)
             result_events.extend(
                 self._warning_events(
                     warnings=stt_warnings,
@@ -176,6 +181,7 @@ class RoomPipelineSession:
             self.events.append(subtitle_event)
             result_events.append(subtitle_event)
 
+            translate_started_at = perf_counter()
             translation_result, translate_warnings = await run_with_fallback(
                 stage="translate",
                 providers=self.provider_bundle.translate_chain,
@@ -186,6 +192,7 @@ class RoomPipelineSession:
                     list(context),
                 ),
             )
+            stage_timings_ms["translate"] = int((perf_counter() - translate_started_at) * 1000)
             result_events.extend(
                 self._warning_events(
                     warnings=translate_warnings,
@@ -197,11 +204,12 @@ class RoomPipelineSession:
                 )
             )
 
-            translation_details: dict[str, str | None] = {
+            translation_details: dict[str, object | None] = {
                 "translate_provider": translation_result.provider,
                 "tts_provider": None,
                 "audio_ref": None,
                 "target_identity": resolved_target_identity,
+                "stage_timings_ms": stage_timings_ms,
             }
 
             translation_event = SessionEvent(
@@ -220,14 +228,17 @@ class RoomPipelineSession:
             self.events.append(translation_event)
             result_events.append(translation_event)
 
+            tts_started_at = perf_counter()
             try:
                 tts_result, tts_warnings = await run_with_fallback(
                     stage="tts",
                     providers=self.provider_bundle.tts_chain,
                     invoke=lambda provider: provider.synthesize(translation_result.translated_text, resolved_voice_profile),
                 )
+                stage_timings_ms["tts"] = int((perf_counter() - tts_started_at) * 1000)
                 translation_details["tts_provider"] = tts_result.provider
                 translation_details["audio_ref"] = tts_result.audio_ref
+                translation_details["tts_status"] = "ready"
                 result_events.extend(
                     self._warning_events(
                         warnings=tts_warnings,
@@ -236,9 +247,11 @@ class RoomPipelineSession:
                         source_lang=resolved_source_lang,
                         target_lang=resolved_target_lang,
                         target_identity=resolved_target_identity,
-                    )
+                )
                 )
             except FallbackExhaustedError as exhausted:
+                stage_timings_ms["tts"] = int((perf_counter() - tts_started_at) * 1000)
+                translation_details["tts_status"] = "failed"
                 result_events.extend(
                     self._warning_events(
                         warnings=exhausted.warnings,
@@ -260,6 +273,17 @@ class RoomPipelineSession:
                     )
                 )
 
+            translation_details["total_ms"] = int((perf_counter() - started_at) * 1000)
+            logger.info(
+                "room_pipeline_utterance_timed session=%s speaker=%s target=%s stt_ms=%s translate_ms=%s tts_ms=%s total_ms=%s",
+                self.session_id,
+                request.speaker_identity,
+                resolved_target_identity,
+                stage_timings_ms.get("stt", 0),
+                stage_timings_ms.get("translate", 0),
+                stage_timings_ms.get("tts", 0),
+                translation_details["total_ms"],
+            )
             context.append(
                 {
                     "source_text": stt_result.text,

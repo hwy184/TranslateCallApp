@@ -7,8 +7,14 @@ def build_router(session_manager: SessionManager) -> APIRouter:
     router = APIRouter()
 
     @router.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "service": "worker-python", "version": "v1-skeleton"}
+    async def health() -> dict[str, object]:
+        items = await session_manager.list_sessions()
+        return {
+            "status": "ok",
+            "service": "worker-python",
+            "version": "v1-skeleton",
+            "active_sessions": len(items),
+        }
 
     @router.get("/internal/sessions")
     async def list_sessions():

@@ -35,16 +35,16 @@ class Settings(BaseSettings):
     local_stt_model_size: str = "base"
     local_stt_compute_type: str = "int8"
     local_stt_device: str = "cpu"
-    stt_energy_threshold: int = Field(default=250, ge=50, le=5000)
-    stt_min_speech_ms: int = Field(default=900, ge=100, le=3000)
-    stt_min_voiced_ms: int = Field(default=120, ge=40, le=3000)
-    stt_min_voiced_ratio: float = Field(default=0.22, ge=0.05, le=1.0)
-    stt_silence_hangover_ms: int = Field(default=1200, ge=80, le=3000)
-    stt_max_segment_ms: int = Field(default=12000, ge=2000, le=30000)
-    stt_min_request_interval_ms: int = Field(default=550, ge=0, le=10000)
-    stt_duplicate_suppress_window_ms: int = Field(default=5000, ge=0, le=30000)
-    stt_force_segment_peak_rms: int = Field(default=5000, ge=200, le=30000)
-    stt_force_segment_min_voiced_ms: int = Field(default=120, ge=0, le=500)
+    stt_energy_threshold: int = Field(default=220, ge=50, le=5000)
+    stt_min_speech_ms: int = Field(default=550, ge=100, le=3000)
+    stt_min_voiced_ms: int = Field(default=80, ge=40, le=3000)
+    stt_min_voiced_ratio: float = Field(default=0.18, ge=0.05, le=1.0)
+    stt_silence_hangover_ms: int = Field(default=700, ge=80, le=3000)
+    stt_max_segment_ms: int = Field(default=5000, ge=2000, le=30000)
+    stt_min_request_interval_ms: int = Field(default=350, ge=0, le=10000)
+    stt_duplicate_suppress_window_ms: int = Field(default=3500, ge=0, le=30000)
+    stt_force_segment_peak_rms: int = Field(default=4500, ge=200, le=30000)
+    stt_force_segment_min_voiced_ms: int = Field(default=80, ge=0, le=500)
     edge_tts_voice_default: str = "en-US-AriaNeural"
     edge_tts_rate: str = "+0%"
 

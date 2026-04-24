@@ -5,14 +5,17 @@ services:
       dockerfile: Dockerfile
     container_name: voice_backend
     env_file:
-      - ../backend-node/.env.example
+      - path: ../backend-node/.env.example
+        required: true
+      - path: ../backend-node/.env
+        required: false
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/voice_translation
     ports:
       - "3000:3000"
     depends_on:
       worker:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
     healthcheck:
@@ -27,7 +30,12 @@ services:
       dockerfile: Dockerfile
     container_name: voice_worker
     env_file:
-      - ../worker-python/.env.example
+      - path: ../worker-python/.env.example
+        required: true
+      - path: ../worker-python/.env
+        required: false
+      - path: ../.env
+        required: false
     environment:
       GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
     volumes:
