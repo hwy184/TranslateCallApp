@@ -32,6 +32,8 @@ pnpm-debug.log*
 # env files
 .env
 .env.*
+env.laptop.example
+env.laptop.*.example
 secrets/
 secrets/*.json
 gen-lang-client-*.json
@@ -52,5 +54,6 @@ readme/*
 !readme/DEMO_AND_METRICS_CHECKLIST.md
 !readme/MVP_TEST_CASES.md
 !readme/DEPLOY_TEST_README.md
+!readme/TEAM_ENV_SETUP.md
 !readme/legacy/
 !readme/legacy/**
