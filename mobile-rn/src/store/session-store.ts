@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { DEFAULT_API_BASE_URL, DEFAULT_LIVEKIT_URL } from "../config/env";
 import type { AuthSession, CreateRoomResponse, JoinRoomResponse, User } from "../types/api";
+import type { AppLanguage } from "../i18n";
 import {
   mapCreateToRoomContext,
   mapJoinToRoomContext,
@@ -13,12 +14,14 @@ import {
 interface SessionState {
   apiBaseUrl: string;
   livekitUrl: string;
+  appLanguage: AppLanguage;
   user: User | null;
   authSession: AuthSession | null;
   roomContext: RoomContext | null;
   lastSessionId: string | null;
   setApiBaseUrl: (value: string) => void;
   setLivekitUrl: (value: string) => void;
+  setAppLanguage: (value: AppLanguage) => void;
   setAuth: (value: { user: User; session: AuthSession }) => void;
   clearAuth: () => void;
   setRoomFromCreate: (value: {
@@ -39,6 +42,7 @@ export const useSessionStore = create<SessionState>()(
     (set) => ({
       apiBaseUrl: DEFAULT_API_BASE_URL,
       livekitUrl: DEFAULT_LIVEKIT_URL,
+      appLanguage: "vi",
       user: null,
       authSession: null,
       roomContext: null,
@@ -46,6 +50,7 @@ export const useSessionStore = create<SessionState>()(
 
       setApiBaseUrl: (value) => set({ apiBaseUrl: value.trim() }),
       setLivekitUrl: (value) => set({ livekitUrl: value.trim() }),
+      setAppLanguage: (value) => set({ appLanguage: value }),
 
       setAuth: (value) => set({ user: value.user, authSession: value.session }),
       clearAuth: () => set({ user: null, authSession: null, roomContext: null }),
@@ -71,6 +76,7 @@ export const useSessionStore = create<SessionState>()(
       partialize: (state) => ({
         apiBaseUrl: state.apiBaseUrl,
         livekitUrl: state.livekitUrl,
+        appLanguage: state.appLanguage,
         user: state.user,
         authSession: null,
         roomContext: null,

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { hashPassword, verifyPassword } from "../services/password.js";
-import { signHs256 } from "../services/jwt.js";
+import { signHs256, verifyHs256 } from "../services/jwt.js";
 import { createLivekitToken } from "../services/livekit-token.js";
 import { persistence } from "../services/persistence.js";
 import { startWorkerSession, stopWorkerSession, updateWorkerParticipantSettings } from "../services/worker-client.js";
@@ -69,6 +69,9 @@ const historyQuerySchema = z.object({
 const historySyncItemSchema = z.object({
     room_id: z.string().min(1),
     session_id: z.string().min(1),
+    conversation_id: z.string().min(1),
+    title: z.string().min(1).max(160),
+    title_updated_at: z.string().datetime({ offset: true }).optional(),
     utterance_id: z.string().min(1),
     speaker_identity: z.string().min(1),
     source_lang: z.enum(["vi", "en"]),
@@ -80,6 +83,15 @@ const historySyncItemSchema = z.object({
 });
 const historySyncSchema = z.object({
     items: z.array(historySyncItemSchema).min(1)
+});
+const historyRenameSchema = z.object({
+    title: z.string().min(1).max(160),
+    title_updated_at: z.string().datetime({ offset: true }).optional()
+});
+const jwtPayloadSchema = z.object({
+    sub: z.string().min(1),
+    role: z.enum(["guest", "registered"]),
+    exp: z.number().int().optional()
 });
 const workerEventSchema = z
     .object({
@@ -128,6 +140,43 @@ function issueJwt(userId, role) {
         iat: now,
         exp: now + 60 * 60 * 24 * 7
     }, env.JWT_SECRET);
+}
+function getAccessTokenFromRequest(req) {
+    const tokenFromHeader = typeof req.headers["x-access-token"] === "string" ? req.headers["x-access-token"] : undefined;
+    const bearer = typeof req.headers.authorization === "string" ? req.headers.authorization.replace(/^Bearer\s+/i, "") : undefined;
+    return tokenFromHeader ?? bearer;
+}
+async function requireAuth(req, res) {
+    const token = getAccessTokenFromRequest(req);
+    if (!token) {
+        sendError(res, 401, ERROR_CODES.AUTH_UNAUTHORIZED, "Missing access token");
+        return null;
+    }
+    const payload = verifyHs256(token, env.JWT_SECRET);
+    if (!payload) {
+        sendError(res, 401, ERROR_CODES.AUTH_UNAUTHORIZED, "Invalid access token");
+        return null;
+    }
+    const parsed = jwtPayloadSchema.safeParse(payload);
+    if (!parsed.success) {
+        sendError(res, 401, ERROR_CODES.AUTH_UNAUTHORIZED, "Invalid access token payload");
+        return null;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    if (typeof parsed.data.exp === "number" && parsed.data.exp <= now) {
+        sendError(res, 401, ERROR_CODES.AUTH_UNAUTHORIZED, "Access token expired");
+        return null;
+    }
+    const activeSession = await persistence.getActiveAuthSession(token);
+    if (!activeSession || activeSession.userId !== parsed.data.sub) {
+        sendError(res, 401, ERROR_CODES.AUTH_UNAUTHORIZED, "Auth session is not active");
+        return null;
+    }
+    return {
+        token,
+        userId: parsed.data.sub,
+        role: parsed.data.role
+    };
 }
 function participantMetadata(role, identity, settings) {
     return {
@@ -241,9 +290,7 @@ v1Router.post("/auth/login", async (req, res) => {
 v1Router.post("/auth/logout", async (req, res) => {
     try {
         const payload = authLogoutSchema.parse(req.body);
-        const tokenFromHeader = typeof req.headers["x-access-token"] === "string" ? req.headers["x-access-token"] : undefined;
-        const bearer = typeof req.headers.authorization === "string" ? req.headers.authorization.replace(/^Bearer\s+/i, "") : undefined;
-        const accessToken = payload.access_token ?? tokenFromHeader ?? bearer;
+        const accessToken = payload.access_token ?? getAccessTokenFromRequest(req);
         if (!accessToken) {
             sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Missing access token");
             return;
@@ -262,7 +309,18 @@ v1Router.post("/auth/logout", async (req, res) => {
 });
 v1Router.post("/rooms", async (req, res) => {
     try {
+        const auth = await requireAuth(req, res);
+        if (!auth)
+            return;
+        if (auth.role !== "registered") {
+            sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "Only registered users can create rooms");
+            return;
+        }
         const payload = roomCreateSchema.parse(req.body);
+        if (payload.host_user_id !== auth.userId) {
+            sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "Host user does not match access token");
+            return;
+        }
         const created = await persistence.createRoom({
             hostUserId: payload.host_user_id,
             hostIdentity: payload.host_identity,
@@ -299,8 +357,15 @@ v1Router.post("/rooms", async (req, res) => {
     }
 });
 v1Router.post("/rooms/join", async (req, res) => {
-    const payload = roomJoinSchema.parse(req.body);
     try {
+        const auth = await requireAuth(req, res);
+        if (!auth)
+            return;
+        const payload = roomJoinSchema.parse(req.body);
+        if (payload.guest_user_id !== auth.userId) {
+            sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "Guest user does not match access token");
+            return;
+        }
         const roomBeforeLock = await persistence.getRoom(payload.room_id);
         if (!roomBeforeLock) {
             sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
@@ -424,8 +489,11 @@ v1Router.post("/rooms/join", async (req, res) => {
     }
 });
 v1Router.get("/rooms/resolve/:code", async (req, res) => {
-    const code = z.string().regex(/^\d{6}$/).parse(req.params.code.trim());
     try {
+        const auth = await requireAuth(req, res);
+        if (!auth)
+            return;
+        const code = z.string().regex(/^\d{6}$/).parse(req.params.code.trim());
         const roomBeforeLock = await persistence.getRoomByShortCode(code);
         if (!roomBeforeLock) {
             sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
@@ -444,14 +512,22 @@ v1Router.get("/rooms/resolve/:code", async (req, res) => {
     }
 });
 v1Router.get("/rooms/:roomId/status", async (req, res) => {
-    const roomId = z.string().min(1).parse(req.params.roomId);
     try {
+        const auth = await requireAuth(req, res);
+        if (!auth)
+            return;
+        const roomId = z.string().min(1).parse(req.params.roomId);
         const roomBeforeLock = await persistence.getRoom(roomId);
         if (!roomBeforeLock) {
             sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
             return;
         }
         const room = await closeRoomIfExpired(roomBeforeLock);
+        const canAccess = await persistence.userHasSessionAccess(auth.userId, room.sessionId);
+        if (!canAccess) {
+            sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "You do not have access to this room status");
+            return;
+        }
         res.status(200).json({ room, room_short_code: room.roomCode });
     }
     catch (error) {
@@ -460,8 +536,21 @@ v1Router.get("/rooms/:roomId/status", async (req, res) => {
     }
 });
 v1Router.post("/rooms/:roomId/end", async (req, res) => {
-    const roomId = z.string().min(1).parse(req.params.roomId);
     try {
+        const auth = await requireAuth(req, res);
+        if (!auth)
+            return;
+        const roomId = z.string().min(1).parse(req.params.roomId);
+        const roomBeforeEnd = await persistence.getRoom(roomId);
+        if (!roomBeforeEnd) {
+            sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
+            return;
+        }
+        const hostParticipant = await persistence.getParticipantById(roomBeforeEnd.hostParticipantId);
+        if (!hostParticipant || hostParticipant.userId !== auth.userId) {
+            sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "Only room host can end this room");
+            return;
+        }
         const room = await persistence.endRoom(roomId);
         const warnings = [];
         await stopWorkerSession(room.sessionId, "room_ended").catch((error) => {
@@ -488,9 +577,17 @@ v1Router.post("/rooms/:roomId/end", async (req, res) => {
     }
 });
 v1Router.post("/rooms/:roomId/participants/:participantId/leave", async (req, res) => {
-    const roomId = z.string().min(1).parse(req.params.roomId);
-    const participantId = z.string().min(1).parse(req.params.participantId);
     try {
+        const auth = await requireAuth(req, res);
+        if (!auth)
+            return;
+        const roomId = z.string().min(1).parse(req.params.roomId);
+        const participantId = z.string().min(1).parse(req.params.participantId);
+        const ownedParticipant = await persistence.getParticipantById(participantId);
+        if (!ownedParticipant || ownedParticipant.userId !== auth.userId) {
+            sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "You can only leave your own participant");
+            return;
+        }
         const { room, participant } = await persistence.leaveParticipant(roomId, participantId);
         res.status(200).json({
             room,
@@ -525,10 +622,18 @@ v1Router.post("/rooms/:roomId/participants/:participantId/leave", async (req, re
     }
 });
 v1Router.patch("/rooms/:roomId/participants/:participantId/settings", async (req, res) => {
-    const roomId = z.string().min(1).parse(req.params.roomId);
-    const participantId = z.string().min(1).parse(req.params.participantId);
-    const payload = patchSettingsSchema.parse(req.body);
     try {
+        const auth = await requireAuth(req, res);
+        if (!auth)
+            return;
+        const roomId = z.string().min(1).parse(req.params.roomId);
+        const participantId = z.string().min(1).parse(req.params.participantId);
+        const payload = patchSettingsSchema.parse(req.body);
+        const participantBeforeUpdate = await persistence.getParticipantById(participantId);
+        if (!participantBeforeUpdate || participantBeforeUpdate.userId !== auth.userId) {
+            sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "You can only update your own participant settings");
+            return;
+        }
         const roomBeforeLock = await persistence.getRoom(roomId);
         if (!roomBeforeLock) {
             sendError(res, 404, ERROR_CODES.ROOM_NOT_FOUND, "Room was not found");
@@ -561,7 +666,23 @@ v1Router.patch("/rooms/:roomId/participants/:participantId/settings", async (req
 });
 v1Router.get("/history", async (req, res) => {
     try {
+        const auth = await requireAuth(req, res);
+        if (!auth)
+            return;
+        if (auth.role !== "registered") {
+            sendError(res, 403, ERROR_CODES.USER_NOT_REGISTERED, "Cloud history is for registered users only");
+            return;
+        }
         const query = historyQuerySchema.parse(req.query);
+        if (!query.session_id) {
+            sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "session_id is required");
+            return;
+        }
+        const canAccess = await persistence.userHasSessionAccess(auth.userId, query.session_id);
+        if (!canAccess) {
+            sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "You do not have access to this history session");
+            return;
+        }
         const items = await persistence.listHistory({ roomId: query.room_id, sessionId: query.session_id, limit: query.limit });
         res.status(200).json({ items });
     }
@@ -576,7 +697,22 @@ v1Router.get("/history", async (req, res) => {
 });
 v1Router.post("/history/sync", async (req, res) => {
     try {
+        const auth = await requireAuth(req, res);
+        if (!auth)
+            return;
+        if (auth.role !== "registered") {
+            sendError(res, 403, ERROR_CODES.USER_NOT_REGISTERED, "Guest users cannot sync cloud history");
+            return;
+        }
         const payload = historySyncSchema.parse(req.body);
+        const sessionIds = new Set(payload.items.map((item) => item.session_id));
+        for (const sessionId of sessionIds) {
+            const canAccess = await persistence.userHasSessionAccess(auth.userId, sessionId);
+            if (!canAccess) {
+                sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, `No access to session ${sessionId}`);
+                return;
+            }
+        }
         const inserted = await persistence.syncHistoryItems(payload.items);
         res.status(200).json({ synced: inserted, received: payload.items.length });
     }
@@ -589,9 +725,67 @@ v1Router.post("/history/sync", async (req, res) => {
         sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Sync history failed", message);
     }
 });
+v1Router.patch("/history/conversations/:conversationId/title", async (req, res) => {
+    try {
+        const auth = await requireAuth(req, res);
+        if (!auth)
+            return;
+        if (auth.role !== "registered") {
+            sendError(res, 403, ERROR_CODES.USER_NOT_REGISTERED, "Cloud history is for registered users only");
+            return;
+        }
+        const conversationId = z.string().min(1).parse(req.params.conversationId);
+        const payload = historyRenameSchema.parse(req.body);
+        const sessionId = await persistence.getConversationSessionId(conversationId);
+        if (!sessionId) {
+            sendError(res, 404, ERROR_CODES.HISTORY_NOT_FOUND, "Conversation was not found");
+            return;
+        }
+        const canAccess = await persistence.userHasSessionAccess(auth.userId, sessionId);
+        if (!canAccess) {
+            sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "You do not have access to this conversation");
+            return;
+        }
+        const updated = await persistence.renameConversationTitle({
+            conversationId,
+            title: payload.title.trim(),
+            titleUpdatedAt: payload.title_updated_at
+        });
+        if (!updated) {
+            sendError(res, 404, ERROR_CODES.HISTORY_NOT_FOUND, "Conversation was not found");
+            return;
+        }
+        res.status(200).json({ conversation: updated });
+    }
+    catch (error) {
+        if (error instanceof z.ZodError) {
+            sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Invalid conversation rename payload", error.issues);
+            return;
+        }
+        const message = error instanceof Error ? error.message : "rename_conversation_failed";
+        sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Rename conversation failed", message);
+    }
+});
 v1Router.delete("/history/:id", async (req, res) => {
     try {
+        const auth = await requireAuth(req, res);
+        if (!auth)
+            return;
+        if (auth.role !== "registered") {
+            sendError(res, 403, ERROR_CODES.USER_NOT_REGISTERED, "Cloud history is for registered users only");
+            return;
+        }
         const id = z.coerce.number().int().positive().parse(req.params.id);
+        const historyItem = await persistence.getHistoryItemById(id);
+        if (!historyItem) {
+            sendError(res, 404, ERROR_CODES.HISTORY_NOT_FOUND, "History item was not found");
+            return;
+        }
+        const canAccess = await persistence.userHasSessionAccess(auth.userId, historyItem.session_id);
+        if (!canAccess) {
+            sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "You do not have access to this history item");
+            return;
+        }
         const removed = await persistence.deleteHistoryItem(id);
         if (!removed) {
             sendError(res, 404, ERROR_CODES.HISTORY_NOT_FOUND, "History item was not found");
@@ -610,8 +804,7 @@ v1Router.delete("/history/:id", async (req, res) => {
 });
 v1Router.delete("/history", async (_req, res) => {
     try {
-        const deleted = await persistence.deleteAllHistory();
-        res.status(200).json({ deleted });
+        sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "Delete all history is disabled");
     }
     catch (error) {
         const message = error instanceof Error ? error.message : "delete_all_history_failed";
@@ -623,6 +816,11 @@ v1Router.post("/translate/text", (_req, res) => {
 });
 v1Router.post("/internal/worker/events", async (req, res) => {
     try {
+        const workerSecret = typeof req.headers["x-worker-secret"] === "string" ? req.headers["x-worker-secret"] : "";
+        if (!workerSecret || workerSecret !== env.WORKER_INTERNAL_SECRET) {
+            sendError(res, 401, ERROR_CODES.AUTH_UNAUTHORIZED, "Invalid worker secret");
+            return;
+        }
         const payload = workerEventSchema.parse(req.body);
         await persistence.recordWorkerEvent(payload);
         res.status(202).json({ accepted: true });
@@ -638,6 +836,11 @@ v1Router.post("/internal/worker/events", async (req, res) => {
 });
 v1Router.get("/internal/worker/events", async (_req, res) => {
     try {
+        const workerSecret = typeof _req.headers["x-worker-secret"] === "string" ? _req.headers["x-worker-secret"] : "";
+        if (!workerSecret || workerSecret !== env.WORKER_INTERNAL_SECRET) {
+            sendError(res, 401, ERROR_CODES.AUTH_UNAUTHORIZED, "Invalid worker secret");
+            return;
+        }
         const items = await persistence.listWorkerEvents();
         res.status(200).json({ items });
     }

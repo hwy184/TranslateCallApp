@@ -21,6 +21,7 @@ import type { RootStackParamList } from "../navigation/types";
 import { useSessionStore } from "../store/session-store";
 import { appendTranscriptEvent } from "../storage/transcript-storage";
 import { palette } from "../theme";
+import { t } from "../i18n";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Call">;
 
@@ -29,6 +30,7 @@ export function CallScreen({ navigation }: Props) {
   const livekitUrl = useSessionStore((s) => s.livekitUrl);
   const roomContext = useSessionStore((s) => s.roomContext);
   const authSession = useSessionStore((s) => s.authSession);
+  const appLanguage = useSessionStore((s) => s.appLanguage);
   const clearRoom = useSessionStore((s) => s.clearRoom);
   const api = useMemo(
     () => new ApiClient(apiBaseUrl, () => authSession?.accessToken ?? null),
@@ -74,14 +76,18 @@ export function CallScreen({ navigation }: Props) {
       <View style={styles.itemRow}>
         <View style={[styles.itemDot, { backgroundColor: eventColor(item.type) }]} />
         <View style={styles.itemContent}>
-          <Text style={styles.itemType}>{item.type}</Text>
+          <View style={styles.itemHeaderRow}>
+            <Text style={styles.itemType}>{item.type}</Text>
+            <Text style={styles.itemSpeaker}>{item.speakerIdentity ?? "system"}</Text>
+          </View>
           {!!item.text && <Text style={styles.itemSource}>{item.text}</Text>}
           {!!item.translatedText && (
             <Text style={styles.itemTranslated}>{item.translatedText}</Text>
           )}
           <Text style={styles.itemMeta}>
-            {item.speakerIdentity ?? "system"} {item.sourceLang ?? ""}->{item.targetLang ?? ""}{" "}
-            {item.timestamp}
+            {item.sourceLang ?? ""}
+            {"->"}
+            {item.targetLang ?? ""} | {item.timestamp}
           </Text>
         </View>
       </View>
@@ -240,6 +246,7 @@ export function CallScreen({ navigation }: Props) {
   };
 
   const copyRoomCode = async () => {
+    if (!roomContext) return;
     await Clipboard.setStringAsync(roomContext.roomId);
     setStatus("Room ID copied");
   };
@@ -279,21 +286,25 @@ export function CallScreen({ navigation }: Props) {
       contentContainerStyle={styles.container}
       ListHeaderComponent={
         <View style={styles.headerBlock}>
-          <View style={styles.headerCard}>
-            <Text style={styles.title}>Room: {roomContext.roomId}</Text>
-            <Text style={styles.meta}>Session: {roomContext.sessionId}</Text>
-            <Text style={styles.meta}>
+          <View style={styles.titleCard}>
+            <Text style={styles.title}>{t(appLanguage, "call_title")}</Text>
+            <Text style={styles.metaLine}>Room: {roomContext.roomId}</Text>
+            <Text style={styles.metaLine}>Session: {roomContext.sessionId}</Text>
+            <Text style={styles.metaLine}>
               Role: {roomContext.role} | Identity: {roomContext.participantIdentity}
             </Text>
+          </View>
+          <View style={styles.statusCard}>
+            <Text style={styles.statusLabel}>Connection</Text>
             <Text style={styles.meta}>
               Status: {status} ({connection})
             </Text>
-            <Pressable style={styles.copyBtn} onPress={copyRoomCode}>
-              <Text style={styles.copyText}>Copy Room ID</Text>
-            </Pressable>
           </View>
 
           <View style={styles.controls}>
+            <Pressable style={styles.copyBtn} onPress={copyRoomCode}>
+              <Text style={styles.copyText}>Copy Room ID</Text>
+            </Pressable>
             <Pressable style={styles.secondaryBtn} onPress={toggleMic} disabled={busy !== null}>
               <Text style={styles.secondaryText}>{micOn ? "Mute Mic" : "Unmute Mic"}</Text>
             </Pressable>
@@ -301,9 +312,7 @@ export function CallScreen({ navigation }: Props) {
               {busy === "leave" ? (
                 <ActivityIndicator color="#2B0303" />
               ) : (
-                <Text style={styles.dangerText}>
-                  {roomContext.role === "host" ? "End Room" : "Leave Room"}
-                </Text>
+                <Text style={styles.dangerText}>{roomContext.role === "host" ? "End Room" : "Leave Room"}</Text>
               )}
             </Pressable>
           </View>
@@ -317,7 +326,7 @@ export function CallScreen({ navigation }: Props) {
 
           {!!error && <Text style={styles.error}>{error}</Text>}
           <View style={styles.timelineTitleRow}>
-            <Text style={styles.subtitle}>Realtime Timeline</Text>
+            <Text style={styles.subtitle}>Realtime Timeline (newest first)</Text>
           </View>
         </View>
       }
@@ -342,7 +351,7 @@ const styles = StyleSheet.create({
   headerBlock: {
     gap: 12
   },
-  headerCard: {
+  titleCard: {
     backgroundColor: palette.card,
     borderColor: palette.border,
     borderWidth: 1,
@@ -352,16 +361,33 @@ const styles = StyleSheet.create({
   },
   title: {
     color: palette.text,
-    fontSize: 16,
-    fontWeight: "700"
+    fontSize: 18,
+    fontWeight: "800"
   },
-  meta: {
+  metaLine: {
     color: palette.muted,
     fontSize: 12
   },
+  statusCard: {
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderColor: palette.border,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    gap: 2
+  },
+  statusLabel: {
+    color: palette.text,
+    fontWeight: "700",
+    fontSize: 13
+  },
+  meta: {
+    color: palette.info,
+    fontSize: 13,
+    fontWeight: "600"
+  },
   copyBtn: {
-    marginTop: 6,
-    alignSelf: "flex-start",
+    flex: 1,
     borderWidth: 1,
     borderColor: palette.border,
     borderRadius: 8,
@@ -412,8 +438,8 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     color: palette.text,
-    fontSize: 15,
-    fontWeight: "700",
+    fontSize: 16,
+    fontWeight: "800",
     marginBottom: 8
   },
   empty: {
@@ -432,23 +458,38 @@ const styles = StyleSheet.create({
   },
   itemContent: {
     flex: 1,
+    backgroundColor: "rgba(255,255,255,0.03)",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingTop: 8,
     borderBottomWidth: 1,
     borderBottomColor: palette.border,
     paddingBottom: 8
+  },
+  itemHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center"
   },
   itemType: {
     color: palette.text,
     fontSize: 12,
     fontWeight: "700"
   },
+  itemSpeaker: {
+    color: palette.muted,
+    fontSize: 11
+  },
   itemSource: {
     color: palette.info,
-    fontSize: 13
+    fontSize: 13,
+    lineHeight: 18
   },
   itemTranslated: {
     color: palette.accent,
-    fontSize: 14,
-    fontWeight: "600"
+    fontSize: 15,
+    fontWeight: "700",
+    lineHeight: 21
   },
   itemMeta: {
     color: palette.muted,

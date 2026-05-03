@@ -17,25 +17,31 @@ import { SectionCard } from "../components/SectionCard";
 import { useSessionStore } from "../store/session-store";
 import { palette } from "../theme";
 import type { RootStackParamList } from "../navigation/types";
+import { t } from "../i18n";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Auth">;
 
 export function AuthScreen({ navigation }: Props) {
   const [guestName, setGuestName] = useState("Guest Mobile");
-  const [username, setUsername] = useState("mobile_user");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [registerName, setRegisterName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState<"guest" | "login" | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [loading, setLoading] = useState<"guest" | "login" | "register" | null>(null);
 
   const apiBaseUrl = useSessionStore((s) => s.apiBaseUrl);
   const livekitUrl = useSessionStore((s) => s.livekitUrl);
   const setApiBaseUrl = useSessionStore((s) => s.setApiBaseUrl);
   const setLivekitUrl = useSessionStore((s) => s.setLivekitUrl);
   const setAuth = useSessionStore((s) => s.setAuth);
+  const appLanguage = useSessionStore((s) => s.appLanguage);
 
   const api = useMemo(() => new ApiClient(apiBaseUrl), [apiBaseUrl]);
 
   const runGuest = async () => {
     setError(null);
+    setInfo(null);
     setLoading("guest");
     try {
       const result = await api.authGuest(guestName.trim() || "Guest Mobile");
@@ -50,10 +56,34 @@ export function AuthScreen({ navigation }: Props) {
 
   const runLogin = async () => {
     setError(null);
+    setInfo(null);
     setLoading("login");
     try {
-      const result = await api.authLogin(username.trim() || "mobile_user");
+      const result = await api.authLogin({
+        email: email.trim(),
+        password
+      });
       setAuth(result);
+      navigation.replace("Lobby");
+    } catch (e) {
+      setError(friendlyErrorMessage(e));
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const runRegister = async () => {
+    setError(null);
+    setInfo(null);
+    setLoading("register");
+    try {
+      const result = await api.authRegister({
+        email: email.trim(),
+        password,
+        displayName: registerName.trim() || undefined
+      });
+      setAuth(result);
+      setInfo("Register thanh cong, da dang nhap.");
       navigation.replace("Lobby");
     } catch (e) {
       setError(friendlyErrorMessage(e));
@@ -109,29 +139,64 @@ export function AuthScreen({ navigation }: Props) {
             {loading === "guest" ? (
               <ActivityIndicator color="#001015" />
             ) : (
-              <Text style={styles.primaryText}>Continue as Guest</Text>
+              <Text style={styles.primaryText}>{t(appLanguage, "continue_guest")}</Text>
             )}
           </Pressable>
         </SectionCard>
 
-        <SectionCard title="Registered Login (username)">
+        <SectionCard title="Registered Account">
           <TextInput
             style={styles.input}
-            value={username}
-            onChangeText={setUsername}
+            value={email}
+            onChangeText={setEmail}
             autoCapitalize="none"
-            placeholder="username"
+            keyboardType="email-address"
+            placeholder="email@example.com"
             placeholderTextColor={palette.muted}
           />
-          <Pressable style={styles.secondaryBtn} onPress={runLogin} disabled={loading !== null}>
-            {loading === "login" ? (
-              <ActivityIndicator color={palette.text} />
-            ) : (
-              <Text style={styles.secondaryText}>Login Registered</Text>
-            )}
-          </Pressable>
+          <TextInput
+            style={styles.input}
+            value={password}
+            onChangeText={setPassword}
+            autoCapitalize="none"
+            secureTextEntry
+            placeholder="password (min 8)"
+            placeholderTextColor={palette.muted}
+          />
+          <TextInput
+            style={styles.input}
+            value={registerName}
+            onChangeText={setRegisterName}
+            placeholder="display name (optional)"
+            placeholderTextColor={palette.muted}
+          />
+          <View style={styles.rowButtons}>
+            <Pressable
+              style={styles.secondaryBtn}
+              onPress={runLogin}
+              disabled={loading !== null || !email.trim() || !password.trim()}
+            >
+              {loading === "login" ? (
+                <ActivityIndicator color={palette.text} />
+              ) : (
+                <Text style={styles.secondaryText}>{t(appLanguage, "login")}</Text>
+              )}
+            </Pressable>
+            <Pressable
+              style={styles.primaryBtn}
+              onPress={runRegister}
+              disabled={loading !== null || !email.trim() || password.trim().length < 8}
+            >
+              {loading === "register" ? (
+                <ActivityIndicator color="#001015" />
+              ) : (
+                <Text style={styles.primaryText}>{t(appLanguage, "register")}</Text>
+              )}
+            </Pressable>
+          </View>
         </SectionCard>
 
+        {!!info && <Text style={styles.info}>{info}</Text>}
         {!!error && <Text style={styles.error}>{error}</Text>}
       </ScrollView>
     </KeyboardAvoidingView>
@@ -195,7 +260,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10
   },
+  rowButtons: {
+    flexDirection: "row",
+    gap: 8
+  },
   primaryBtn: {
+    flex: 1,
     backgroundColor: palette.accent,
     borderRadius: 10,
     paddingVertical: 12,
@@ -206,6 +276,7 @@ const styles = StyleSheet.create({
     fontWeight: "800"
   },
   secondaryBtn: {
+    flex: 1,
     backgroundColor: palette.info,
     borderRadius: 10,
     paddingVertical: 12,
@@ -214,6 +285,10 @@ const styles = StyleSheet.create({
   secondaryText: {
     color: "#06202A",
     fontWeight: "800"
+  },
+  info: {
+    color: palette.accent,
+    fontWeight: "700"
   },
   error: {
     color: "#FFE9E9",

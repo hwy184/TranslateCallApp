@@ -9,6 +9,7 @@ const envSchema = z.object({
     LIVEKIT_API_KEY: z.string().default(""),
     LIVEKIT_API_SECRET: z.string().default(""),
     JWT_SECRET: z.string().min(16).default("change-me-super-secret-key"),
+    WORKER_INTERNAL_SECRET: z.string().min(12).default("change-me-worker-secret"),
     WORKER_INTERNAL_URL: z.string().url().default("http://worker:8000"),
     DATABASE_URL: z.string().min(1).default("postgresql://postgres:postgres@postgres:5432/voice_translation")
 });

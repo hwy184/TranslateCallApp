@@ -51,6 +51,12 @@ export function friendlyErrorMessage(error: unknown): string {
       return "Khong ket noi duoc backend.";
     case "VALIDATION_ERROR":
       return "Du lieu gui len khong hop le.";
+    case "AUTH_INVALID_CREDENTIALS":
+      return "Sai email hoac mat khau.";
+    case "AUTH_UNAUTHORIZED":
+      return "Phien dang nhap khong hop le hoac da het han.";
+    case "AUTH_FORBIDDEN":
+      return "Ban khong co quyen thuc hien thao tac nay.";
     case "ROOM_NOT_FOUND":
       return "Khong tim thay room.";
     case "ROOM_ENDED":

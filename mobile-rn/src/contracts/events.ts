@@ -1,4 +1,4 @@
-import type { DataChannelEventV1 } from "../../../shared/contracts/types";
+import type { DataChannelEventV1 } from "./data-channel-types";
 
 const ALLOWED_TYPES = new Set([
   "subtitle.partial",

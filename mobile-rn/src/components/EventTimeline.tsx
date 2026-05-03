@@ -35,7 +35,9 @@ export function EventTimeline({ items }: Props) {
               <Text style={styles.translated}>{item.translatedText}</Text>
             )}
             <Text style={styles.meta}>
-              {item.speakerIdentity ?? "system"} {item.sourceLang ?? ""}->{item.targetLang ?? ""}{" "}
+              {item.speakerIdentity ?? "system"} {item.sourceLang ?? ""}
+              {"->"}
+              {item.targetLang ?? ""}{" "}
               {item.timestamp}
             </Text>
           </View>

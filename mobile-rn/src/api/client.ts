@@ -2,16 +2,22 @@ import {
   authResponseSchema,
   createRoomResponseSchema,
   endRoomResponseSchema,
+  conversationRenameResponseSchema,
   historyResponseSchema,
+  historySyncResponseSchema,
   joinRoomResponseSchema,
+  resolveRoomResponseSchema,
   voicePreferenceResponseSchema
 } from "../types/api";
 import type {
   AuthResponse,
   CreateRoomResponse,
   EndRoomResponse,
+  ConversationRenameResponse,
   HistoryResponse,
+  HistorySyncResponse,
   JoinRoomResponse,
+  ResolveRoomResponse,
   VoicePreferenceResponse
 } from "../types/api";
 import { ApiClientError, parseBackendError } from "./errors";
@@ -103,13 +109,36 @@ export class ApiClient {
     );
   }
 
-  authLogin(username: string): Promise<AuthResponse> {
+  authRegister(input: {
+    email: string;
+    password: string;
+    displayName?: string;
+  }): Promise<AuthResponse> {
+    return this.request(
+      "/api/v1/auth/register",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: input.email,
+          password: input.password,
+          display_name: input.displayName
+        })
+      },
+      authResponseSchema
+    );
+  }
+
+  authLogin(input: { email: string; password: string }): Promise<AuthResponse> {
     return this.request(
       "/api/v1/auth/login",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username })
+        body: JSON.stringify({
+          email: input.email,
+          password: input.password
+        })
       },
       authResponseSchema
     );
@@ -175,6 +204,16 @@ export class ApiClient {
     );
   }
 
+  resolveRoomByCode(code: string): Promise<ResolveRoomResponse> {
+    return this.request(
+      `/api/v1/rooms/resolve/${encodeURIComponent(code)}`,
+      {
+        method: "GET"
+      },
+      resolveRoomResponseSchema
+    );
+  }
+
   endRoom(roomId: string): Promise<EndRoomResponse> {
     return this.request(
       `/api/v1/rooms/${roomId}/end`,
@@ -193,6 +232,53 @@ export class ApiClient {
         method: "GET"
       },
       historyResponseSchema
+    );
+  }
+
+  historySync(input: {
+    items: Array<{
+      room_id: string;
+      session_id: string;
+      conversation_id: string;
+      title: string;
+      title_updated_at?: string;
+      utterance_id: string;
+      speaker_identity: string;
+      source_lang: "vi" | "en";
+      target_lang: "vi" | "en";
+      source_text: string | null;
+      translated_text: string | null;
+      event_type: string;
+      created_at?: string;
+    }>;
+  }): Promise<HistorySyncResponse> {
+    return this.request(
+      "/api/v1/history/sync",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input)
+      },
+      historySyncResponseSchema
+    );
+  }
+
+  renameConversationTitle(input: {
+    conversationId: string;
+    title: string;
+    titleUpdatedAt?: string;
+  }): Promise<ConversationRenameResponse> {
+    return this.request(
+      `/api/v1/history/conversations/${encodeURIComponent(input.conversationId)}/title`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: input.title,
+          title_updated_at: input.titleUpdatedAt
+        })
+      },
+      conversationRenameResponseSchema
     );
   }
 

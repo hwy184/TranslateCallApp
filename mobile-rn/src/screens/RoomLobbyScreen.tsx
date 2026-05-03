@@ -13,6 +13,7 @@ import * as Clipboard from "expo-clipboard";
 import { ApiClient } from "../api/client";
 import { friendlyErrorMessage } from "../api/errors";
 import { SectionCard } from "../components/SectionCard";
+import { t } from "../i18n";
 import type { RootStackParamList } from "../navigation/types";
 import { useSessionStore } from "../store/session-store";
 import { palette } from "../theme";
@@ -28,6 +29,8 @@ export function RoomLobbyScreen({ navigation }: Props) {
   const setRoomFromJoin = useSessionStore((s) => s.setRoomFromJoin);
   const clearAuth = useSessionStore((s) => s.clearAuth);
   const lastSessionId = useSessionStore((s) => s.lastSessionId);
+  const appLanguage = useSessionStore((s) => s.appLanguage);
+  const setAppLanguage = useSessionStore((s) => s.setAppLanguage);
 
   const api = useMemo(
     () => new ApiClient(apiBaseUrl, () => authSession?.accessToken ?? null),
@@ -36,7 +39,11 @@ export function RoomLobbyScreen({ navigation }: Props) {
 
   const [hostDisplayName, setHostDisplayName] = useState("Host Android");
   const [guestDisplayName, setGuestDisplayName] = useState("Guest Android");
-  const [roomIdInput, setRoomIdInput] = useState("");
+  const [roomCodeInput, setRoomCodeInput] = useState("");
+  const [hostSourceLanguage, setHostSourceLanguage] = useState<"vi" | "en">("vi");
+  const [hostTargetLanguage, setHostTargetLanguage] = useState<"vi" | "en">("en");
+  const [guestSourceLanguage, setGuestSourceLanguage] = useState<"vi" | "en">("en");
+  const [guestTargetLanguage, setGuestTargetLanguage] = useState<"vi" | "en">("vi");
   const [loading, setLoading] = useState<"create" | "join" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -60,8 +67,8 @@ export function RoomLobbyScreen({ navigation }: Props) {
         hostUserId: user.userId,
         hostIdentity,
         hostDisplayName: hostDisplayName.trim() || "Host Android",
-        sourceLanguage: "vi",
-        targetLanguage: "en",
+        sourceLanguage: hostSourceLanguage,
+        targetLanguage: hostTargetLanguage,
         voiceProfile: "host-default"
       });
 
@@ -70,8 +77,9 @@ export function RoomLobbyScreen({ navigation }: Props) {
         displayName: hostDisplayName.trim() || "Host Android",
         payload: result
       });
-      setInfo(`Room created: ${result.room.roomId}`);
-      await Clipboard.setStringAsync(result.room.roomId);
+      const roomCode = result.room_short_code ?? result.room.roomId;
+      setInfo(`Room created. Code: ${roomCode}`);
+      await Clipboard.setStringAsync(roomCode);
       navigation.navigate("Call");
     } catch (e) {
       setError(friendlyErrorMessage(e));
@@ -87,13 +95,14 @@ export function RoomLobbyScreen({ navigation }: Props) {
     const guestIdentity = generateIdentity("guest");
 
     try {
+      const resolved = await api.resolveRoomByCode(roomCodeInput.trim());
       const result = await api.joinRoom({
-        roomId: roomIdInput.trim(),
+        roomId: resolved.room.roomId,
         guestUserId: user.userId,
         guestIdentity,
         guestDisplayName: guestDisplayName.trim() || "Guest Android",
-        sourceLanguage: "en",
-        targetLanguage: "vi",
+        sourceLanguage: guestSourceLanguage,
+        targetLanguage: guestTargetLanguage,
         voiceProfile: "guest-default"
       });
 
@@ -113,17 +122,22 @@ export function RoomLobbyScreen({ navigation }: Props) {
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
       <View style={styles.headerCard}>
-        <Text style={styles.headerTitle}>Voice Room Lobby</Text>
+        <Text style={styles.headerTitle}>{t(appLanguage, "lobby_title")}</Text>
         <Text style={styles.text}>
           {user.displayName} ({user.type})
         </Text>
         {!!lastSessionId && <Text style={styles.muted}>Last session: {lastSessionId}</Text>}
         <View style={styles.row}>
           <Pressable style={styles.ghostBtn} onPress={() => navigation.navigate("History")}>
-            <Text style={styles.ghostText}>History</Text>
+            <Text style={styles.ghostText}>{t(appLanguage, "history_title")}</Text>
           </Pressable>
           <Pressable style={styles.ghostBtn} onPress={() => navigation.navigate("VoiceSettings")}>
             <Text style={styles.ghostText}>Voice Settings</Text>
+          </Pressable>
+          <Pressable style={styles.ghostBtn} onPress={() => setAppLanguage(appLanguage === "vi" ? "en" : "vi")}>
+            <Text style={styles.ghostText}>
+              {t(appLanguage, "app_language")}: {appLanguage.toUpperCase()}
+            </Text>
           </Pressable>
           <Pressable
             style={[styles.ghostBtn, { borderColor: palette.danger }]}
@@ -145,12 +159,19 @@ export function RoomLobbyScreen({ navigation }: Props) {
           placeholder="Host display name"
           placeholderTextColor={palette.muted}
         />
-        <Text style={styles.muted}>Language: VI to EN (fixed in v1 in-call).</Text>
-        <Pressable style={styles.primaryBtn} onPress={onCreate} disabled={loading !== null}>
+        <View style={styles.row}>
+          <Pressable style={styles.langBtn} onPress={() => setHostSourceLanguage(hostSourceLanguage === "vi" ? "en" : "vi")}>
+            <Text style={styles.ghostText}>Source: {hostSourceLanguage.toUpperCase()}</Text>
+          </Pressable>
+          <Pressable style={styles.langBtn} onPress={() => setHostTargetLanguage(hostTargetLanguage === "vi" ? "en" : "vi")}>
+            <Text style={styles.ghostText}>Target: {hostTargetLanguage.toUpperCase()}</Text>
+          </Pressable>
+        </View>
+        <Pressable style={styles.primaryBtn} onPress={onCreate} disabled={loading !== null || hostSourceLanguage === hostTargetLanguage}>
           {loading === "create" ? (
             <ActivityIndicator color="#041C14" />
           ) : (
-            <Text style={styles.primaryText}>Create Room as Host</Text>
+            <Text style={styles.primaryText}>{t(appLanguage, "create_room")}</Text>
           )}
         </Pressable>
       </SectionCard>
@@ -165,22 +186,30 @@ export function RoomLobbyScreen({ navigation }: Props) {
         />
         <TextInput
           style={styles.input}
-          value={roomIdInput}
-          onChangeText={setRoomIdInput}
+          value={roomCodeInput}
+          onChangeText={(value) => setRoomCodeInput(value.replace(/\D/g, "").slice(0, 6))}
           autoCapitalize="none"
-          placeholder="room_xxx"
+          keyboardType="number-pad"
+          placeholder="6-digit room code"
           placeholderTextColor={palette.muted}
         />
-        <Text style={styles.muted}>Language: EN to VI (fixed in v1 in-call).</Text>
+        <View style={styles.row}>
+          <Pressable style={styles.langBtn} onPress={() => setGuestSourceLanguage(guestSourceLanguage === "vi" ? "en" : "vi")}>
+            <Text style={styles.ghostText}>Source: {guestSourceLanguage.toUpperCase()}</Text>
+          </Pressable>
+          <Pressable style={styles.langBtn} onPress={() => setGuestTargetLanguage(guestTargetLanguage === "vi" ? "en" : "vi")}>
+            <Text style={styles.ghostText}>Target: {guestTargetLanguage.toUpperCase()}</Text>
+          </Pressable>
+        </View>
         <Pressable
           style={styles.secondaryBtn}
           onPress={onJoin}
-          disabled={loading !== null || roomIdInput.trim().length === 0}
+          disabled={loading !== null || roomCodeInput.trim().length !== 6 || guestSourceLanguage === guestTargetLanguage}
         >
           {loading === "join" ? (
             <ActivityIndicator color="#061A22" />
           ) : (
-            <Text style={styles.secondaryText}>Join as Guest</Text>
+            <Text style={styles.secondaryText}>{t(appLanguage, "join_guest")}</Text>
           )}
         </Pressable>
       </SectionCard>
@@ -233,6 +262,14 @@ const styles = StyleSheet.create({
     color: palette.text,
     paddingVertical: 10,
     paddingHorizontal: 12
+  },
+  langBtn: {
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 9,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: "rgba(255,255,255,0.04)"
   },
   primaryBtn: {
     backgroundColor: palette.accent,

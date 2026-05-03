@@ -96,6 +96,22 @@ export const persistence = {
       `, [accessToken]);
         return (result.rowCount ?? 0) > 0;
     },
+    async getActiveAuthSession(accessToken) {
+        const result = await pool.query(`
+        SELECT access_token, user_id, created_at
+        FROM auth_sessions
+        WHERE access_token = $1 AND revoked_at IS NULL
+        LIMIT 1
+      `, [accessToken]);
+        if ((result.rowCount ?? 0) === 0) {
+            return undefined;
+        }
+        return {
+            accessToken: String(result.rows[0].access_token),
+            userId: String(result.rows[0].user_id),
+            createdAt: new Date(String(result.rows[0].created_at)).toISOString()
+        };
+    },
     async createRoom(input) {
         const roomId = `room_${randomUUID()}`;
         const sessionId = `session_${randomUUID()}`;
@@ -304,13 +320,15 @@ export const persistence = {
         try {
             await pool.query(`
             INSERT INTO transcript_items(
-              room_id, session_id, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type
+              room_id, session_id, conversation_id, title, title_updated_at, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (session_id, utterance_id, event_type) DO NOTHING
           `, [
                 event.room_id,
                 event.session_id,
+                event.session_id,
+                `Conversation ${event.session_id.slice(-6)}`,
                 event.utterance_id,
                 event.speaker_identity,
                 event.source_lang,
@@ -356,6 +374,9 @@ export const persistence = {
         id,
         room_id,
         session_id,
+        conversation_id,
+        title,
+        title_updated_at,
         utterance_id,
         speaker_identity,
         source_lang,
@@ -374,6 +395,9 @@ export const persistence = {
             id: Number(row.id),
             room_id: String(row.room_id),
             session_id: String(row.session_id),
+            conversation_id: String(row.conversation_id),
+            title: String(row.title),
+            title_updated_at: new Date(String(row.title_updated_at)).toISOString(),
             utterance_id: String(row.utterance_id),
             speaker_identity: String(row.speaker_identity),
             source_lang: String(row.source_lang),
@@ -383,6 +407,58 @@ export const persistence = {
             event_type: String(row.event_type),
             created_at: new Date(String(row.created_at)).toISOString()
         }));
+    },
+    async getHistoryItemById(id) {
+        const result = await pool.query(`
+        SELECT
+          id,
+        room_id,
+        session_id,
+        conversation_id,
+        title,
+        title_updated_at,
+        utterance_id,
+          speaker_identity,
+          source_lang,
+          target_lang,
+          source_text,
+          translated_text,
+          event_type,
+          created_at
+        FROM transcript_items
+        WHERE id = $1
+        LIMIT 1
+      `, [id]);
+        if ((result.rowCount ?? 0) === 0) {
+            return undefined;
+        }
+        const row = result.rows[0];
+        return {
+            id: Number(row.id),
+            room_id: String(row.room_id),
+            session_id: String(row.session_id),
+            conversation_id: String(row.conversation_id),
+            title: String(row.title),
+            title_updated_at: new Date(String(row.title_updated_at)).toISOString(),
+            utterance_id: String(row.utterance_id),
+            speaker_identity: String(row.speaker_identity),
+            source_lang: String(row.source_lang),
+            target_lang: String(row.target_lang),
+            source_text: row.source_text ? String(row.source_text) : null,
+            translated_text: row.translated_text ? String(row.translated_text) : null,
+            event_type: String(row.event_type),
+            created_at: new Date(String(row.created_at)).toISOString()
+        };
+    },
+    async userHasSessionAccess(userId, sessionId) {
+        const result = await pool.query(`
+        SELECT 1
+        FROM rooms r
+        JOIN participants p ON p.room_id = r.room_id
+        WHERE r.session_id = $1 AND p.user_id = $2
+        LIMIT 1
+      `, [sessionId, userId]);
+        return (result.rowCount ?? 0) > 0;
     },
     async deleteHistoryItem(id) {
         const result = await pool.query("DELETE FROM transcript_items WHERE id = $1", [id]);
@@ -404,13 +480,16 @@ export const persistence = {
             for (const item of items) {
                 const result = await client.query(`
             INSERT INTO transcript_items(
-              room_id, session_id, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type, created_at
+              room_id, session_id, conversation_id, title, title_updated_at, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type, created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, NOW()))
+            VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, NOW()), $6, $7, $8, $9, $10, $11, $12, COALESCE($13::timestamptz, NOW()))
             ON CONFLICT (session_id, utterance_id, event_type) DO NOTHING
           `, [
                     item.room_id,
                     item.session_id,
+                    item.conversation_id,
+                    item.title,
+                    item.title_updated_at,
                     item.utterance_id,
                     item.speaker_identity,
                     item.source_lang,
@@ -424,6 +503,37 @@ export const persistence = {
             }
         });
         return inserted;
+    },
+    async renameConversationTitle(input) {
+        const result = await pool.query(`
+        UPDATE transcript_items
+        SET
+          title = $2,
+          title_updated_at = COALESCE($3::timestamptz, NOW())
+        WHERE conversation_id = $1
+        RETURNING conversation_id, title, title_updated_at
+      `, [input.conversationId, input.title, input.titleUpdatedAt ?? null]);
+        if ((result.rowCount ?? 0) === 0) {
+            return undefined;
+        }
+        return {
+            conversation_id: String(result.rows[0].conversation_id),
+            title: String(result.rows[0].title),
+            title_updated_at: new Date(String(result.rows[0].title_updated_at)).toISOString()
+        };
+    },
+    async getConversationSessionId(conversationId) {
+        const result = await pool.query(`
+        SELECT session_id
+        FROM transcript_items
+        WHERE conversation_id = $1
+        ORDER BY id DESC
+        LIMIT 1
+      `, [conversationId]);
+        if ((result.rowCount ?? 0) === 0) {
+            return undefined;
+        }
+        return String(result.rows[0].session_id);
     },
     async upsertVoicePreference(input) {
         return withTransaction(async (client) => {

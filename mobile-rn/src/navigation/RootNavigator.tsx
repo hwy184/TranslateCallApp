@@ -9,6 +9,7 @@ import { HistoryScreen } from "../screens/HistoryScreen";
 import { VoiceSettingsScreen } from "../screens/VoiceSettingsScreen";
 import type { RootStackParamList } from "./types";
 import { useSessionStore } from "../store/session-store";
+import { t } from "../i18n";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -25,6 +26,7 @@ const navTheme = {
 
 export function RootNavigator() {
   const user = useSessionStore((s) => s.user);
+  const appLanguage = useSessionStore((s) => s.appLanguage);
 
   return (
     <NavigationContainer theme={navTheme}>
@@ -36,14 +38,14 @@ export function RootNavigator() {
           contentStyle: { backgroundColor: palette.bg }
         }}
       >
-        <Stack.Screen name="Auth" component={AuthScreen} options={{ title: "Sign In" }} />
+        <Stack.Screen name="Auth" component={AuthScreen} options={{ title: t(appLanguage, "auth_title") }} />
         <Stack.Screen
           name="Lobby"
           component={RoomLobbyScreen}
-          options={{ title: "Voice Room Lobby" }}
+          options={{ title: t(appLanguage, "lobby_title") }}
         />
-        <Stack.Screen name="Call" component={CallScreen} options={{ title: "Realtime Call" }} />
-        <Stack.Screen name="History" component={HistoryScreen} options={{ title: "History" }} />
+        <Stack.Screen name="Call" component={CallScreen} options={{ title: t(appLanguage, "call_title") }} />
+        <Stack.Screen name="History" component={HistoryScreen} options={{ title: t(appLanguage, "history_title") }} />
         <Stack.Screen
           name="VoiceSettings"
           component={VoiceSettingsScreen}

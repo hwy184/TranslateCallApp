@@ -7,6 +7,10 @@ manifests/
 temp_tts_*.mp3
 audio_test/
 textOutput/
+_tmp_*/
+_tmp_*
+*_tmp.*
+_diagram_values.txt
 
 
 # dependencies
@@ -57,3 +61,4 @@ readme/*
 !readme/TEAM_ENV_SETUP.md
 !readme/legacy/
 !readme/legacy/**
+

@@ -15,6 +15,7 @@ logger = logging.getLogger("worker.backend-events")
 class BackendEventsClient:
     def __init__(self, settings: Settings) -> None:
         self._url = settings.backend_events_url
+        self._worker_secret = settings.backend_worker_secret
         self._timeout = settings.backend_events_timeout_sec
         self._retries = settings.backend_events_retries
         self._client = httpx.AsyncClient(timeout=self._timeout)
@@ -39,7 +40,11 @@ class BackendEventsClient:
         last_error: Exception | None = None
         for attempt in range(self._retries + 1):
             try:
-                response = await self._client.post(self._url, json=payload)
+                response = await self._client.post(
+                    self._url,
+                    json=payload,
+                    headers={"x-worker-secret": self._worker_secret},
+                )
                 response.raise_for_status()
                 return
             except httpx.HTTPStatusError as exc:

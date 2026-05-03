@@ -50,7 +50,7 @@ export const roomSchema = z.object({
   sessionId: z.string().min(1),
   hostParticipantId: z.string().min(1),
   guestParticipantId: z.string().min(1).optional(),
-  status: z.enum(["waiting_guest", "active", "ended"]),
+  status: z.enum(["waiting", "active", "closed"]),
   createdAt: z.string().min(1),
   endedAt: z.string().min(1).optional(),
   providerProfile: z.string().min(1),
@@ -90,6 +90,7 @@ export type AuthResponse = z.infer<typeof authResponseSchema>;
 
 export const createRoomResponseSchema = z.object({
   room: roomSchema,
+  room_short_code: z.string().min(1).optional(),
   participant: participantSchema,
   metadata: z.object({
     room: roomMetadataSchema,
@@ -102,6 +103,7 @@ export type CreateRoomResponse = z.infer<typeof createRoomResponseSchema>;
 
 export const joinRoomResponseSchema = z.object({
   room: roomSchema,
+  room_short_code: z.string().min(1).optional(),
   participant: participantSchema,
   metadata: z.object({
     room: roomMetadataSchema,
@@ -128,10 +130,20 @@ export const endRoomResponseSchema = z.object({
 
 export type EndRoomResponse = z.infer<typeof endRoomResponseSchema>;
 
+export const resolveRoomResponseSchema = z.object({
+  room: roomSchema,
+  room_short_code: z.string().min(1)
+});
+
+export type ResolveRoomResponse = z.infer<typeof resolveRoomResponseSchema>;
+
 export const historyItemSchema = z.object({
   id: z.number(),
   room_id: z.string().min(1),
   session_id: z.string().min(1),
+  conversation_id: z.string().min(1),
+  title: z.string().min(1),
+  title_updated_at: z.string().min(1),
   utterance_id: z.string().min(1),
   speaker_identity: z.string().min(1),
   source_lang: z.string().min(2),
@@ -149,6 +161,23 @@ export const historyResponseSchema = z.object({
 });
 
 export type HistoryResponse = z.infer<typeof historyResponseSchema>;
+
+export const historySyncResponseSchema = z.object({
+  synced: z.number().int().nonnegative(),
+  received: z.number().int().nonnegative()
+});
+
+export type HistorySyncResponse = z.infer<typeof historySyncResponseSchema>;
+
+export const conversationRenameResponseSchema = z.object({
+  conversation: z.object({
+    conversation_id: z.string().min(1),
+    title: z.string().min(1),
+    title_updated_at: z.string().min(1)
+  })
+});
+
+export type ConversationRenameResponse = z.infer<typeof conversationRenameResponseSchema>;
 
 export const voicePreferenceSchema = z.object({
   user_id: z.string().min(1),

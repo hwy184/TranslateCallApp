@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     livekit_bridge_enabled: bool = False
     livekit_worker_identity_prefix: str = "ai_worker_"
     backend_events_url: str = "http://backend:3000/api/v1/internal/worker/events"
+    backend_worker_secret: str = "change-me-worker-secret"
     backend_events_timeout_sec: float = Field(default=3.0, gt=0)
     backend_events_retries: int = Field(default=2, ge=0, le=5)
     default_provider_profile: str = "google-first"
