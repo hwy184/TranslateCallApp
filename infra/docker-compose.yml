@@ -11,15 +11,17 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/voice_translation
+      WORKER_INTERNAL_URL: http://worker:8000
+      WORKER_INTERNAL_URLS: http://worker:8000,http://worker2:8000,http://worker3:8000,http://worker4:8000,http://worker5:8000,http://worker6:8000,http://worker7:8000,http://worker8:8000
     ports:
-      - "3000:3000"
+      - "3000:8080"
     depends_on:
       worker:
         condition: service_healthy
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -38,10 +40,194 @@ services:
         required: false
     environment:
       GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      BACKEND_EVENTS_URL: http://backend:8080/api/v1/internal/worker/events
+      BACKEND_WORKER_SECRET: change-me-worker-secret
     volumes:
       - ../secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker2:
+    build:
+      context: ../worker-python
+      dockerfile: Dockerfile
+    container_name: voice_worker2
+    env_file:
+      - path: ../worker-python/.env.example
+        required: true
+      - path: ../worker-python/.env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      BACKEND_EVENTS_URL: http://backend:8080/api/v1/internal/worker/events
+      BACKEND_WORKER_SECRET: change-me-worker-secret
+    volumes:
+      - ../secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker3:
+    build:
+      context: ../worker-python
+      dockerfile: Dockerfile
+    container_name: voice_worker3
+    env_file:
+      - path: ../worker-python/.env.example
+        required: true
+      - path: ../worker-python/.env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      BACKEND_EVENTS_URL: http://backend:8080/api/v1/internal/worker/events
+      BACKEND_WORKER_SECRET: change-me-worker-secret
+    volumes:
+      - ../secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
+    ports:
+      - "8002:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker4:
+    build:
+      context: ../worker-python
+      dockerfile: Dockerfile
+    container_name: voice_worker4
+    env_file:
+      - path: ../worker-python/.env.example
+        required: true
+      - path: ../worker-python/.env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      BACKEND_EVENTS_URL: http://backend:8080/api/v1/internal/worker/events
+      BACKEND_WORKER_SECRET: change-me-worker-secret
+    volumes:
+      - ../secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
+    ports:
+      - "8003:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker5:
+    build:
+      context: ../worker-python
+      dockerfile: Dockerfile
+    container_name: voice_worker5
+    env_file:
+      - path: ../worker-python/.env.example
+        required: true
+      - path: ../worker-python/.env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      BACKEND_EVENTS_URL: http://backend:8080/api/v1/internal/worker/events
+      BACKEND_WORKER_SECRET: change-me-worker-secret
+    volumes:
+      - ../secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
+    ports:
+      - "8004:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker6:
+    build:
+      context: ../worker-python
+      dockerfile: Dockerfile
+    container_name: voice_worker6
+    env_file:
+      - path: ../worker-python/.env.example
+        required: true
+      - path: ../worker-python/.env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      BACKEND_EVENTS_URL: http://backend:8080/api/v1/internal/worker/events
+      BACKEND_WORKER_SECRET: change-me-worker-secret
+    volumes:
+      - ../secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
+    ports:
+      - "8005:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker7:
+    build:
+      context: ../worker-python
+      dockerfile: Dockerfile
+    container_name: voice_worker7
+    env_file:
+      - path: ../worker-python/.env.example
+        required: true
+      - path: ../worker-python/.env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      BACKEND_EVENTS_URL: http://backend:8080/api/v1/internal/worker/events
+      BACKEND_WORKER_SECRET: change-me-worker-secret
+    volumes:
+      - ../secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
+    ports:
+      - "8006:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker8:
+    build:
+      context: ../worker-python
+      dockerfile: Dockerfile
+    container_name: voice_worker8
+    env_file:
+      - path: ../worker-python/.env.example
+        required: true
+      - path: ../worker-python/.env
+        required: false
+      - path: ../.env
+        required: false
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      BACKEND_EVENTS_URL: http://backend:8080/api/v1/internal/worker/events
+      BACKEND_WORKER_SECRET: change-me-worker-secret
+    volumes:
+      - ../secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
+    ports:
+      - "8007:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
       interval: 15s

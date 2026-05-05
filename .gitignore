@@ -11,6 +11,11 @@ _tmp_*/
 _tmp_*
 *_tmp.*
 _diagram_values.txt
+*.tmp
+*.temp
+tmp/
+tmp_*/
+*.mjs
 
 
 # dependencies
@@ -61,4 +66,4 @@ readme/*
 !readme/TEAM_ENV_SETUP.md
 !readme/legacy/
 !readme/legacy/**
-
+infra/measure_ch7.js

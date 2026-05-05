@@ -6,7 +6,7 @@ export const APP_TAGLINE = 'KẾT NỐI MỌI NGÔN NGỮ';
 // API
 export const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL?.trim() ||
-  `http://${process.env.EXPO_PUBLIC_SERVER_HOST?.trim() || 'Hwybankem'}:3000/api/v1`;
+  `http://${process.env.EXPO_PUBLIC_SERVER_HOST?.trim() || '192.168.1.7'}:3000/api/v1`;
 export const LIVEKIT_URL =
   process.env.EXPO_PUBLIC_LIVEKIT_URL?.trim() || 'wss://translatestream-wuc53qsp.livekit.cloud';
 export const API_TIMEOUT = 10000;

@@ -167,6 +167,7 @@ export const persistence = {
 
   async createRoom(input: {
     hostUserId: string;
+    hostUserType: "guest" | "registered";
     hostIdentity: string;
     hostSettings: ParticipantSettings;
     providerProfile: string;
@@ -177,7 +178,7 @@ export const persistence = {
     const hostParticipantId = `participant_${randomUUID()}`;
 
     return withTransaction(async (client) => {
-      await ensureUser(client, input.hostUserId, "registered", input.hostIdentity);
+      await ensureUser(client, input.hostUserId, input.hostUserType, input.hostIdentity);
 
       let roomCode = "";
       let codeReady = false;

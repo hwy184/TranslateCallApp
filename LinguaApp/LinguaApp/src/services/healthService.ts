@@ -12,11 +12,12 @@ export interface SystemHealth {
 
 export async function getSystemHealth(): Promise<SystemHealth> {
   const baseUrl = useAuthStore.getState().apiBaseUrl;
+  const healthBaseUrl = baseUrl.replace(/\/api\/v1\/?$/i, '');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT);
 
   try {
-    const response = await fetch(`${baseUrl}/health`, {
+    const response = await fetch(`${healthBaseUrl}/health`, {
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
