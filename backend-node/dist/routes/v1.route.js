@@ -312,10 +312,6 @@ v1Router.post("/rooms", async (req, res) => {
         const auth = await requireAuth(req, res);
         if (!auth)
             return;
-        if (auth.role !== "registered") {
-            sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "Only registered users can create rooms");
-            return;
-        }
         const payload = roomCreateSchema.parse(req.body);
         if (payload.host_user_id !== auth.userId) {
             sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "Host user does not match access token");
@@ -323,6 +319,7 @@ v1Router.post("/rooms", async (req, res) => {
         }
         const created = await persistence.createRoom({
             hostUserId: payload.host_user_id,
+            hostUserType: auth.role,
             hostIdentity: payload.host_identity,
             hostSettings: payload.host_settings,
             providerProfile: payload.provider_profile,

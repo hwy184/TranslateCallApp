@@ -117,7 +117,7 @@ export const persistence = {
         const sessionId = `session_${randomUUID()}`;
         const hostParticipantId = `participant_${randomUUID()}`;
         return withTransaction(async (client) => {
-            await ensureUser(client, input.hostUserId, "registered", input.hostIdentity);
+            await ensureUser(client, input.hostUserId, input.hostUserType, input.hostIdentity);
             let roomCode = "";
             let codeReady = false;
             for (let attempt = 0; attempt < 20; attempt += 1) {

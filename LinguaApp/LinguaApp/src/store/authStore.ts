@@ -40,11 +40,27 @@ const normalizeApiBaseUrl = (value: string | null | undefined): string => {
     return API_BASE_URL;
   }
 
-  const knownBadHosts = ['168.192.1.9', '10.0.2.2', '127.0.0.1', 'localhost'];
+  const isPrivateOrLocalHost = (host: string): boolean => {
+    const normalized = host.toLowerCase();
+    if (normalized === 'localhost') return true;
+    if (normalized === '127.0.0.1') return true;
+    if (normalized === '10.0.2.2') return true;
+
+    const parts = normalized.split('.').map((item) => Number(item));
+    if (parts.length !== 4 || parts.some((part) => Number.isNaN(part))) {
+      return false;
+    }
+
+    const [a, b] = parts;
+    if (a === 10) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+  };
 
   try {
     const parsed = new URL(next);
-    if (knownBadHosts.includes(parsed.hostname)) {
+    if (isPrivateOrLocalHost(parsed.hostname)) {
       return API_BASE_URL;
     }
     return next;

@@ -17,6 +17,15 @@ class ApiClient {
     return useAuthStore.getState().apiBaseUrl;
   }
 
+  private shouldBypassNgrokWarning(baseUrl: string): boolean {
+    try {
+      const host = new URL(baseUrl).hostname.toLowerCase();
+      return host.endsWith(".ngrok-free.app") || host.endsWith(".ngrok-free.dev");
+    } catch {
+      return false;
+    }
+  }
+
   private resolveToken(): string | null {
     return useAuthStore.getState().session?.accessToken ?? null;
   }
@@ -32,6 +41,11 @@ class ApiClient {
     const headers = new Headers(options.headers ?? {});
     headers.set('Content-Type', 'application/json');
 
+    const baseUrl = this.resolveBaseUrl();
+    if (this.shouldBypassNgrokWarning(baseUrl)) {
+      headers.set("ngrok-skip-browser-warning", "true");
+    }
+
     const token = this.resolveToken();
     if (!skipAuth && token) {
       headers.set('Authorization', `Bearer ${token}`);
@@ -42,7 +56,7 @@ class ApiClient {
     let payload: JsonValue;
 
     try {
-      response = await fetch(`${this.resolveBaseUrl()}${path}`, {
+      response = await fetch(`${baseUrl}${path}`, {
         ...options,
         headers,
         signal: controller.signal,
