@@ -1,0 +1,37 @@
+# Keep EAS uploads minimal for faster cloud builds.
+
+# Dependencies and package manager caches
+node_modules/
+.npm/
+.pnpm-store/
+
+# Expo / Metro local caches
+.expo/
+.expo-shared/
+.metro-health-check*
+
+# Native generated/build caches
+android/.gradle/
+android/app/build/
+android/build/
+ios/build/
+
+# If this project uses managed/prebuild flow, Android/iOS can be regenerated on EAS.
+# Excluding them usually saves hundreds of MB.
+android/.cxx/
+
+# Logs and temp
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+tmp/
+temp/
+
+# VCS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Env files that should not be uploaded
+.env*.local

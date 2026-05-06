@@ -100,3 +100,15 @@ export const syncHistory = async (items: HistoryItem[]): Promise<void> => {
   if (!items.length) return;
   await apiClient.post('/history/sync', { items });
 };
+
+export const syncLocalHistoryToCloud = async (): Promise<number> => {
+  const local = await getHistoryLocal();
+  if (!local.length) return 0;
+
+  const items = local.flatMap((conversation) => conversation.items ?? []);
+  if (!items.length) return 0;
+
+  await syncHistory(items);
+  await deleteAllHistoryLocal();
+  return items.length;
+};

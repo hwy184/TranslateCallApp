@@ -35,6 +35,12 @@
       "expo-router",
       "expo-font",
       "@livekit/react-native-expo-plugin"
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "9887c44f-41f5-49c4-ad0f-d4e0eaeea6ef"
+      }
+    }
   }
 }

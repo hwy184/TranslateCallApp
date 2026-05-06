@@ -304,7 +304,7 @@ export const persistence = {
       const updatedRoomResult = await client.query(
         `
           UPDATE rooms
-          SET guest_participant_id = $1, status = 'active'
+          SET guest_participant_id = $1, status = 'active', created_at = NOW()
           WHERE room_id = $2
           RETURNING room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
         `,

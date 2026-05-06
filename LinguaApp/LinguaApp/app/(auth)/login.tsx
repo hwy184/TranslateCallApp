@@ -18,6 +18,7 @@ import { router } from 'expo-router';
 import { Colors, Typography, Spacing, BorderRadius } from '../../src/constants/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import { login, loginGuest } from '../../src/services/authService';
+import { syncLocalHistoryToCloud } from '../../src/services/historyService';
 import { friendlyErrorMessage } from '../../src/services/errors';
 import { LinguaLogo } from '../../src/components/LinguaLogo';
 import { GlobeIllustration } from '../../src/components/GlobeIllustration';
@@ -44,6 +45,7 @@ export default function LoginScreen() {
     try {
       const res = await login({ email: email.trim(), password });
       await setAuth(res.user, res.session);
+      await syncLocalHistoryToCloud().catch(() => 0);
       router.replace('/(tabs)');
     } catch (err: unknown) {
       Alert.alert('Đăng nhập thất bại', friendlyErrorMessage(err));

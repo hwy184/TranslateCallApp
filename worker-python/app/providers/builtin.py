@@ -40,13 +40,8 @@ class RuleTranslateProvider(TranslateProvider):
         if _fail_marker(self.name) in text:
             raise RuntimeError(f"{self.name}_forced_failure")
 
-        # Lightweight deterministic transform for scaffold stage.
-        ctx_suffix = ""
-        if context:
-            last = context[-1].get("translated_text", "")
-            if last:
-                ctx_suffix = f" [ctx:{last[:24]}]"
-        translated = f"{text} ({source_lang}->{target_lang} by {self.name}){ctx_suffix}"
+        # Keep fallback output clean for end users (no debug suffixes).
+        translated = text
         return TranslateResult(translated_text=translated, provider=self.name)
 
 

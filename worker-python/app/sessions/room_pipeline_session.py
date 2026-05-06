@@ -187,7 +187,7 @@ class RoomPipelineSession:
                 providers=self.provider_bundle.translate_chain,
                 invoke=lambda provider: provider.translate(
                     stt_result.text,
-                    stt_result.detected_language,
+                    resolved_source_lang,
                     resolved_target_lang,
                     list(context),
                 ),
@@ -218,7 +218,7 @@ class RoomPipelineSession:
                 room_id=self.room_id,
                 utterance_id=utterance_id,
                 speaker_identity=request.speaker_identity,
-                source_lang=stt_result.detected_language,
+                source_lang=resolved_source_lang,
                 target_lang=resolved_target_lang,
                 timestamp=utc_now_iso(),
                 text=stt_result.text,

@@ -417,17 +417,33 @@ export default function CallScreen() {
           if (identity && !identity.startsWith(WORKER_IDENTITY_PREFIX)) {
             setPeerStatus(roomContext.role === 'host' ? 'left' : 'closed');
             if (roomContext.role === 'guest' && !remoteRoomClosedRef.current) {
-              remoteRoomClosedRef.current = true;
-              void saveLocalHistoryRef.current();
-              Alert.alert('Phòng đã kết thúc', 'Host đã rời phòng hoặc kết thúc phòng gọi.', [
-                {
-                  text: 'OK',
-                  onPress: () => {
-                    void setRoomContext(null);
-                    router.replace('/(tabs)');
+              void (async () => {
+                try {
+                  const data = await getRoomStatus(roomContext.roomId);
+                  if (canceled) return;
+                  if (data.room.status !== 'closed') {
+                    setPeerStatus('waiting');
+                    setStatus('Host tạm mất kết nối. Đang chờ host quay lại...');
+                    return;
+                  }
+                } catch {
+                  // Keep guest in room on transient status failures.
+                  setPeerStatus('waiting');
+                  setStatus('Host tạm mất kết nối. Đang chờ host quay lại...');
+                  return;
+                }
+                remoteRoomClosedRef.current = true;
+                void saveLocalHistoryRef.current();
+                Alert.alert('Phòng đã kết thúc', 'Host đã rời phòng hoặc kết thúc phòng gọi.', [
+                  {
+                    text: 'OK',
+                    onPress: () => {
+                      void setRoomContext(null);
+                      router.replace('/(tabs)');
+                    },
                   },
-                },
-              ]);
+                ]);
+              })();
             }
           }
         };
@@ -460,6 +476,13 @@ export default function CallScreen() {
         );
         localParticipantIdentityRef.current = connectedIdentity;
         setLocalParticipantIdentity(connectedIdentity);
+        const hasPeerAlready = Array.from(room.remoteParticipants.values()).some((participant: any) => {
+          const identity = String(participant?.identity ?? '');
+          return identity && !identity.startsWith(WORKER_IDENTITY_PREFIX);
+        });
+        if (hasPeerAlready) {
+          setPeerStatus('connected');
+        }
         if (localWorkerTrackRef.current) {
           setTrackVolume(localWorkerTrackRef.current, 0);
         }
