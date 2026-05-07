@@ -58,3 +58,4 @@ coverage/
 *.lcov
 
 infra/measure_ch7.js
+readme
