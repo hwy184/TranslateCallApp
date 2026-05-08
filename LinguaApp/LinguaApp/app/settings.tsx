@@ -8,8 +8,10 @@ import { Colors, Typography, Spacing, BorderRadius } from '../src/constants/them
 import { LinguaLogo } from '../src/components/LinguaLogo';
 import { useAuthStore } from '../src/store/authStore';
 import { logout as logoutApi } from '../src/services/authService';
+import { useI18n } from '../src/i18n';
 
 export default function SettingsScreen() {
+  const { t } = useI18n();
   const session = useAuthStore((s) => s.session);
   const clearSession = useAuthStore((s) => s.logout);
 
@@ -61,25 +63,25 @@ export default function SettingsScreen() {
             <Ionicons name='person-circle' size={48} color='rgba(255,255,255,0.8)' />
           </View>
           <View style={styles.profileInfo}>
-            <Text style={styles.profileName}>Thông tin tài khoản</Text>
-            <Text style={styles.profileSub}>Xem hồ sơ và phiên đăng nhập</Text>
+            <Text style={styles.profileName}>{t('settings_account_title')}</Text>
+            <Text style={styles.profileSub}>{t('settings_account_sub')}</Text>
           </View>
           <Ionicons name='chevron-forward' size={20} color='rgba(255,255,255,0.5)' />
         </TouchableOpacity>
 
         <View style={styles.menuCard}>
-          <MenuItem label='Ngôn ngữ & Dịch thuật' onPress={() => router.push('/language-settings')} />
+          <MenuItem label={t('settings_language_menu')} onPress={() => router.push('/language-settings')} />
           <View style={styles.menuDivider} />
-          <MenuItem label='Phiên bản' onPress={() => router.push('/version')} />
+          <MenuItem label={t('settings_version_menu')} onPress={() => router.push('/version')} />
         </View>
 
         <View style={styles.menuCard}>
           <MenuItem
-            label='Đăng xuất'
+            label={t('settings_logout_menu')}
             onPress={() => {
-              Alert.alert('Đăng xuất', 'Bạn có chắc muốn đăng xuất?', [
-                { text: 'Hủy', style: 'cancel' },
-                { text: 'Đăng xuất', style: 'destructive', onPress: () => void handleLogout() },
+              Alert.alert(t('settings_logout_title'), t('settings_logout_confirm'), [
+                { text: t('settings_cancel'), style: 'cancel' },
+                { text: t('settings_logout_menu'), style: 'destructive', onPress: () => void handleLogout() },
               ]);
             }}
           />

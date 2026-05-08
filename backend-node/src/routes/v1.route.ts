@@ -710,16 +710,19 @@ v1Router.get("/history", async (req, res) => {
       return;
     }
     const query = historyQuerySchema.parse(req.query);
-    if (!query.session_id) {
-      sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "session_id is required");
-      return;
+    if (query.session_id) {
+      const canAccess = await persistence.userHasSessionAccess(auth.userId, query.session_id);
+      if (!canAccess) {
+        sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "You do not have access to this history session");
+        return;
+      }
     }
-    const canAccess = await persistence.userHasSessionAccess(auth.userId, query.session_id);
-    if (!canAccess) {
-      sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "You do not have access to this history session");
-      return;
-    }
-    const items = await persistence.listHistory({ roomId: query.room_id, sessionId: query.session_id, limit: query.limit });
+    const items = await persistence.listHistory({
+      roomId: query.room_id,
+      sessionId: query.session_id,
+      userId: auth.userId,
+      limit: query.limit
+    });
     res.status(200).json({ items });
   } catch (error) {
     if (error instanceof z.ZodError) {

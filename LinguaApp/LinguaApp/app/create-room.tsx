@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -19,20 +19,24 @@ import { LANGUAGES } from '../src/constants';
 import { useAuthStore } from '../src/store/authStore';
 import { createRoom, toRoomContextFromCreate } from '../src/services/roomService';
 import { friendlyErrorMessage } from '../src/services/errors';
+import { useSettingsStore } from '../src/store/settingsStore';
+import { useI18n } from '../src/i18n';
 
 function createIdentity(prefix: 'host' | 'guest') {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export default function CreateRoomScreen() {
-  const [selectedLang, setSelectedLang] = useState('vi');
+  const { t } = useI18n();
+  const { myLang } = useSettingsStore();
+  const [selectedLang, setSelectedLang] = useState(myLang);
   const [isCreating, setIsCreating] = useState(false);
 
   const { user, setRoomContext } = useAuthStore();
 
   const handleCreate = async () => {
     if (!user) {
-      Alert.alert('Cần đăng nhập', 'Vui lòng đăng nhập lại để tạo phòng.');
+      Alert.alert(t('create_need_login_title'), t('create_need_login_msg'));
       router.replace('/(auth)/login');
       return;
     }
@@ -57,7 +61,7 @@ export default function CreateRoomScreen() {
       await Clipboard.setStringAsync(payload.room.roomCode);
       router.replace(`/call/${payload.room.roomId}`);
     } catch (err: unknown) {
-      Alert.alert('Tạo phòng thất bại', friendlyErrorMessage(err));
+      Alert.alert(t('create_failed_title'), friendlyErrorMessage(err));
     } finally {
       setIsCreating(false);
     }
@@ -85,8 +89,8 @@ export default function CreateRoomScreen() {
             <View style={styles.iconCircle}>
               <Ionicons name="mic" size={48} color={Colors.primaryLight} />
             </View>
-            <Text style={styles.iconTitle}>Chọn ngôn ngữ của bạn</Text>
-            <Text style={styles.iconSubtitle}>Tạo phòng xong app sẽ vào màn gọi và hiển thị mã phòng để bạn gửi cho người kia.</Text>
+            <Text style={styles.iconTitle}>{t('create_title')}</Text>
+            <Text style={styles.iconSubtitle}>{t('create_subtitle')}</Text>
           </View>
 
           <View style={styles.langCard}>
@@ -120,7 +124,7 @@ export default function CreateRoomScreen() {
             ) : (
               <>
                 <Ionicons name="add-circle-outline" size={22} color={Colors.white} />
-                <Text style={styles.primaryButtonText} numberOfLines={1}>Tạo phòng và vào ngay</Text>
+                <Text style={styles.primaryButtonText} numberOfLines={1}>{t('create_button')}</Text>
               </>
             )}
           </TouchableOpacity>

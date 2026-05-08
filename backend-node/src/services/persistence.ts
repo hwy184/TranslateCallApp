@@ -261,6 +261,21 @@ export const persistence = {
     return mapRoom(result.rows[0]);
   },
 
+  async listOpenRoomsCreatedBefore(cutoffIso: string, limit = 200): Promise<Room[]> {
+    const boundedLimit = Math.max(1, Math.min(1000, limit));
+    const result = await pool.query(
+      `
+        SELECT room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+        FROM rooms
+        WHERE status <> 'closed' AND created_at <= $1::timestamptz
+        ORDER BY created_at ASC
+        LIMIT $2
+      `,
+      [cutoffIso, boundedLimit]
+    );
+    return result.rows.map((row) => mapRoom(row));
+  },
+
   async joinRoom(input: {
     roomId: string;
     guestUserId: string;
@@ -510,7 +525,7 @@ export const persistence = {
       .map((row) => ({ ...(row.payload as Record<string, unknown>), received_at: new Date(String(row.received_at)).toISOString() }));
   },
 
-  async listHistory(input: { roomId?: string; sessionId?: string; limit?: number }): Promise<HistoryItem[]> {
+  async listHistory(input: { roomId?: string; sessionId?: string; userId?: string; limit?: number }): Promise<HistoryItem[]> {
     const boundedLimit = Math.max(1, Math.min(500, input.limit ?? 100));
     const clauses: string[] = [];
     const params: Array<string | number> = [];
@@ -522,6 +537,18 @@ export const persistence = {
     if (input.sessionId) {
       params.push(input.sessionId);
       clauses.push(`session_id = $${params.length}`);
+    }
+    if (input.userId) {
+      params.push(input.userId);
+      clauses.push(
+        `EXISTS (
+          SELECT 1
+          FROM rooms r
+          JOIN participants p ON p.room_id = r.room_id
+          WHERE r.session_id = transcript_items.session_id
+            AND p.user_id = $${params.length}
+        )`
+      );
     }
 
     params.push(boundedLimit);

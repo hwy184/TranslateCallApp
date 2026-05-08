@@ -176,6 +176,17 @@ export const persistence = {
         }
         return mapRoom(result.rows[0]);
     },
+    async listOpenRoomsCreatedBefore(cutoffIso, limit = 200) {
+        const boundedLimit = Math.max(1, Math.min(1000, limit));
+        const result = await pool.query(`
+        SELECT room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+        FROM rooms
+        WHERE status <> 'closed' AND created_at <= $1::timestamptz
+        ORDER BY created_at ASC
+        LIMIT $2
+      `, [cutoffIso, boundedLimit]);
+        return result.rows.map((row) => mapRoom(row));
+    },
     async joinRoom(input) {
         return withTransaction(async (client) => {
             const roomResult = await client.query(`
@@ -366,6 +377,16 @@ export const persistence = {
         if (input.sessionId) {
             params.push(input.sessionId);
             clauses.push(`session_id = $${params.length}`);
+        }
+        if (input.userId) {
+            params.push(input.userId);
+            clauses.push(`EXISTS (
+          SELECT 1
+          FROM rooms r
+          JOIN participants p ON p.room_id = r.room_id
+          WHERE r.session_id = transcript_items.session_id
+            AND p.user_id = $${params.length}
+        )`);
         }
         params.push(boundedLimit);
         const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";

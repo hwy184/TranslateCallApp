@@ -22,8 +22,10 @@ import { syncLocalHistoryToCloud } from '../../src/services/historyService';
 import { friendlyErrorMessage } from '../../src/services/errors';
 import { LinguaLogo } from '../../src/components/LinguaLogo';
 import { GlobeIllustration } from '../../src/components/GlobeIllustration';
+import { useI18n } from '../../src/i18n';
 
 export default function LoginScreen() {
+  const { t } = useI18n();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -33,11 +35,11 @@ export default function LoginScreen() {
 
   const handleLogin = async () => {
     if (!email.trim()) {
-      Alert.alert('Thông báo', 'Vui lòng nhập email');
+      Alert.alert(t('join_invalid_code_title'), t('login_email_required'));
       return;
     }
     if (!password) {
-      Alert.alert('Thông báo', 'Vui lòng nhập mật khẩu');
+      Alert.alert(t('join_invalid_code_title'), t('login_password_required'));
       return;
     }
 
@@ -48,7 +50,7 @@ export default function LoginScreen() {
       await syncLocalHistoryToCloud().catch(() => 0);
       router.replace('/(tabs)');
     } catch (err: unknown) {
-      Alert.alert('Đăng nhập thất bại', friendlyErrorMessage(err));
+      Alert.alert(t('login_failed_title'), friendlyErrorMessage(err));
     } finally {
       setIsLoading(false);
     }
@@ -61,7 +63,7 @@ export default function LoginScreen() {
       await setAuth(res.user, res.session);
       router.replace('/(tabs)');
     } catch (err: unknown) {
-      Alert.alert('Không thể vào chế độ khách', friendlyErrorMessage(err));
+      Alert.alert(t('guest_failed_title'), friendlyErrorMessage(err));
     } finally {
       setIsLoading(false);
     }
@@ -93,7 +95,7 @@ export default function LoginScreen() {
               <GlobeIllustration />
             </View>
 
-            <Text style={styles.tagline}>KẾT NỐI MỌI NGÔN NGỮ</Text>
+            <Text style={styles.tagline}>K?T N?I M?I NG�N NG?</Text>
 
             <View style={styles.formCard}>
               <Text style={styles.inputLabel}>Email</Text>
@@ -110,12 +112,12 @@ export default function LoginScreen() {
                 />
               </View>
 
-              <Text style={styles.inputLabel}>Mật khẩu</Text>
+              <Text style={styles.inputLabel}>Password</Text>
               <View style={styles.inputContainer}>
                 <Ionicons name="lock-closed-outline" size={18} color="rgba(26,58,122,0.45)" style={styles.inputIcon} />
                 <TextInput
                   style={[styles.input, styles.hostInput, styles.inputWithIcon]}
-                  placeholder="Mật khẩu"
+                  placeholder="Password"
                   placeholderTextColor={Colors.inputPlaceholder}
                   value={password}
                   onChangeText={setPassword}
@@ -143,19 +145,19 @@ export default function LoginScreen() {
                 {isLoading ? (
                   <ActivityIndicator color={Colors.white} />
                 ) : (
-                  <Text style={styles.loginBtnText} numberOfLines={1}>Đăng nhập</Text>
+                  <Text style={styles.loginBtnText} numberOfLines={1}>{t('login_title_btn')}</Text>
                 )}
               </TouchableOpacity>
             </View>
 
             <TouchableOpacity onPress={() => router.push('/register')} style={styles.registerLink}>
               <Text style={styles.registerText}>
-                Chưa có tài khoản? <Text style={styles.registerTextBold}>Đăng ký ngay</Text>
+                {t('login_no_account')} <Text style={styles.registerTextBold}>{t('login_register_now')}</Text>
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity onPress={handleGuestMode} style={styles.guestLink}>
-              <Text style={styles.guestText}>Tiếp tục không đăng nhập</Text>
+              <Text style={styles.guestText}>{t('login_guest_mode')}</Text>
             </TouchableOpacity>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -223,13 +225,6 @@ const styles = StyleSheet.create({
   hostInput: { paddingLeft: 0 },
   inputIcon: { marginLeft: 12, marginRight: 6 },
   inputWithIcon: { paddingRight: 44 },
-  helperText: {
-    fontSize: Typography.xs,
-    color: 'rgba(255,255,255,0.62)',
-    lineHeight: 16,
-    marginTop: -4,
-    marginBottom: Spacing.sm,
-  },
   eyeBtn: { position: 'absolute', right: 12, padding: 4 },
   loginBtn: {
     backgroundColor: '#16306a',

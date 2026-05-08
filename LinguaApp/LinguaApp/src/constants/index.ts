@@ -31,4 +31,5 @@ export const STORAGE_KEYS = {
   CALL_HISTORY: '@lingua/call_history',
   SETTINGS: '@lingua/settings',
   GUEST_HISTORY: '@lingua/guest_history',
+  HISTORY_SAVE_PREFERENCE: '@lingua/history_save_preference',
 };

@@ -13,6 +13,8 @@ async function safeParseJson(response: Response): Promise<JsonValue> {
 }
 
 class ApiClient {
+  private guestRecoveryPromise: Promise<boolean> | null = null;
+
   private resolveBaseUrl(): string {
     return useAuthStore.getState().apiBaseUrl;
   }
@@ -30,10 +32,54 @@ class ApiClient {
     return useAuthStore.getState().session?.accessToken ?? null;
   }
 
+  private async recoverFromUnauthorized(skipAuth: boolean): Promise<boolean> {
+    if (skipAuth) return false;
+
+    const state = useAuthStore.getState();
+    if (!state.user) return false;
+
+    if (state.user.type === 'registered') {
+      await state.logout();
+      return false;
+    }
+
+    if (this.guestRecoveryPromise) {
+      return this.guestRecoveryPromise;
+    }
+
+    this.guestRecoveryPromise = (async () => {
+      const baseUrl = this.resolveBaseUrl();
+      try {
+        const response = await fetch(`${baseUrl}/auth/guest`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ display_name: `Guest_${Date.now().toString().slice(-4)}` }),
+        });
+        const payload = await safeParseJson(response);
+        const user = (payload as any)?.user;
+        const session = (payload as any)?.session;
+        if (!response.ok || !user || !session) {
+          await state.logout();
+          return false;
+        }
+        await useAuthStore.getState().setGuestAuth(user, session);
+        return true;
+      } catch {
+        await state.logout();
+        return false;
+      } finally {
+        this.guestRecoveryPromise = null;
+      }
+    })();
+
+    return this.guestRecoveryPromise;
+  }
+
   async request<T>(
     path: string,
     options: RequestInit = {},
-    skipAuth = false
+    skipAuth = false,
+    hasRetried = false
   ): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), API_TIMEOUT);
@@ -82,7 +128,14 @@ class ApiClient {
     }
 
     if (!response.ok) {
-      throw parseBackendError(response.status, payload);
+      const parsedError = parseBackendError(response.status, payload);
+      if (response.status === 401 && !hasRetried) {
+        const recovered = await this.recoverFromUnauthorized(skipAuth);
+        if (recovered) {
+          return this.request<T>(path, options, skipAuth, true);
+        }
+      }
+      throw parsedError;
     }
 
     return payload as T;

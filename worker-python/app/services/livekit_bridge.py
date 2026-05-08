@@ -54,6 +54,7 @@ class LiveKitRoomContext:
     last_stt_at_by_speaker: dict[str, float]
     last_transcript_by_speaker: dict[str, tuple[str, float]]
     echo_suppress_until_by_speaker: dict[str, float]
+    last_partial_publish_at: float
 
 
 class LiveKitBridge:
@@ -165,6 +166,7 @@ class LiveKitBridge:
             last_stt_at_by_speaker={},
             last_transcript_by_speaker={},
             echo_suppress_until_by_speaker={},
+            last_partial_publish_at=0.0,
         )
         self._active_sessions[session.session_id] = context
 
@@ -348,6 +350,11 @@ class LiveKitBridge:
             if context is None:
                 continue
             try:
+                if event.type == "subtitle.partial":
+                    now = asyncio.get_running_loop().time()
+                    if now - context.last_partial_publish_at < 0.25:
+                        continue
+                    context.last_partial_publish_at = now
                 payload = json.dumps(event.model_dump(exclude_none=True), ensure_ascii=True)
                 details = event.details if isinstance(event.details, dict) else {}
                 destination = details.get("target_identity")

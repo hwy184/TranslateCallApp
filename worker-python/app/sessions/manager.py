@@ -26,6 +26,11 @@ class SessionManager:
         async with self._lock:
             existing = self._sessions.get(payload.session_id)
             if existing and existing.status == "running":
+                for p in payload.participants:
+                    identity = p.get("identity")
+                    if identity and identity not in existing.participant_by_identity:
+                        existing.participant_by_identity[identity] = p
+                        existing.participants.append(p)
                 return self._to_state(existing)
 
             provider_bundle = self._registry.resolve(payload.provider_profile)
@@ -110,7 +115,7 @@ class SessionManager:
             session = self._sessions.get(session_id)
             if session is None:
                 return None
-            return session.update_participant_settings(
+            updated = session.update_participant_settings(
                 identity,
                 {
                     "source_language": payload.source_language or "",
@@ -118,6 +123,9 @@ class SessionManager:
                     "voice_profile": payload.voice_profile or "",
                 },
             )
+        if updated:
+            await self._emit([session.events[-1]])
+        return updated
 
     def _to_state(self, session: RoomPipelineSession) -> SessionState:
         return SessionState(

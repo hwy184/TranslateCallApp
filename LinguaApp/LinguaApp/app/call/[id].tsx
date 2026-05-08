@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,12 +14,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Audio } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AudioSession } from '@livekit/react-native';
 import { LogLevel, Room, RoomEvent } from 'livekit-client';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { STORAGE_KEYS } from '../../src/constants';
 import { Colors, Typography, Spacing, BorderRadius } from '../../src/constants/theme';
 import { useAuthStore } from '../../src/store/authStore';
+import { useSettingsStore } from '../../src/store/settingsStore';
 import { endRoom, getRoomStatus, leaveParticipant, toShortCode, updateParticipantSettings } from '../../src/services/roomService';
 import { friendlyErrorMessage } from '../../src/services/errors';
 import { saveHistoryLocal, syncHistory, type ConversationHistory } from '../../src/services/historyService';
@@ -45,6 +48,8 @@ type RoomLifecycleEvent = {
   role?: 'host' | 'guest';
   timestamp?: string;
 };
+
+type HistorySaveChoice = 'none' | 'local' | 'cloud';
 
 function parseDataChannelEvent(input: string): TimelineEvent | null {
   let parsed: any;
@@ -181,14 +186,14 @@ export default function CallScreen() {
   const remoteRoomClosedRef = useRef(false);
   const timelineRef = useRef<TimelineEvent[]>([]);
   const timelineListRef = useRef<FlatList<TimelineEvent> | null>(null);
-  const saveLocalHistoryRef = useRef<() => Promise<void>>(async () => undefined);
+  const saveLocalHistoryRef = useRef<() => Promise<boolean>>(async () => false);
   const localWorkerTrackRef = useRef<any | null>(null);
   const localParticipantIdentityRef = useRef(roomContext?.participantIdentity ?? '');
   const [status, setStatus] = useState('Đang chờ');
   const [connection, setConnection] = useState('mất kết nối');
   const [micOn, setMicOn] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(true);
-  const [sourceLanguage, setSourceLanguage] = useState<'vi' | 'en'>('vi');
+  const [sourceLanguage, setSourceLanguage] = useState<'vi' | 'en'>(useSettingsStore(s => s.myLang) as 'vi' | 'en');
   const [busy, setBusy] = useState<'connect' | 'leave' | null>('connect');
   const [error, setError] = useState<string | null>(null);
   const [peerStatus, setPeerStatus] = useState<'waiting' | 'connected' | 'left' | 'closed'>('waiting');
@@ -319,7 +324,7 @@ export default function CallScreen() {
             if (!roomEvent) return;
             if (roomEvent.type === 'participant.left' && roomEvent.participant_identity !== localParticipantIdentityRef.current) {
               setPeerStatus('left');
-              setStatus('Khách đã rời phòng. Mã phòng vẫn còn hiệu lực.');
+              setStatus('Đối tác đã rời phòng.');
             }
           if (roomEvent.type === 'room.closed' && roomContext.role === 'guest' && !remoteRoomClosedRef.current) {
             remoteRoomClosedRef.current = true;
@@ -634,22 +639,72 @@ export default function CallScreen() {
   };
 
   const saveConversationHistoryIfNeeded = async () => {
-    if (!roomContext || !user) return;
+    if (!roomContext || !user) return false;
     const history = buildLocalConversationHistory({
       timeline: timelineRef.current,
       sessionId: roomContext.sessionId,
       roomId: roomContext.roomId,
       roomCode,
     });
-    if (!history) return;
-    if (user?.type === 'registered') {
+    if (!history) return false;
+
+    const getSavedHistoryPreference = async (): Promise<HistorySaveChoice | null> => {
+      const raw = await AsyncStorage.getItem(STORAGE_KEYS.HISTORY_SAVE_PREFERENCE);
+      if (raw === 'none' || raw === 'local' || raw === 'cloud') return raw;
+      return null;
+    };
+
+    const askRememberPreference = (): Promise<boolean> =>
+      new Promise((resolve) => {
+        Alert.alert('Ghi nhớ lựa chọn?', 'Lần sau tự áp dụng lựa chọn này.', [
+          { text: 'Không', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Có', onPress: () => resolve(true) },
+        ]);
+      });
+
+    const askSaveChoice = (): Promise<HistorySaveChoice> =>
+      new Promise((resolve) => {
+        const buttons =
+          user.type === 'registered'
+            ? [
+                { text: 'Không lưu', style: 'destructive' as const, onPress: () => resolve('none') },
+                { text: 'Lưu vào máy', onPress: () => resolve('local') },
+                { text: 'Lưu lên đám mây', onPress: () => resolve('cloud') },
+              ]
+            : [
+                { text: 'Không lưu', style: 'destructive' as const, onPress: () => resolve('none') },
+                { text: 'Lưu vào máy', onPress: () => resolve('local') },
+              ];
+        Alert.alert('Lưu lịch sử cuộc gọi', 'Bạn muốn lưu lịch sử cuộc gọi ở đâu?', buttons);
+      });
+
+    let choice = await getSavedHistoryPreference();
+    if (choice === 'cloud' && user.type !== 'registered') {
+      choice = null;
+    }
+
+    if (!choice) {
+      choice = await askSaveChoice();
+      const remember = await askRememberPreference();
+      if (remember) {
+        await AsyncStorage.setItem(STORAGE_KEYS.HISTORY_SAVE_PREFERENCE, choice);
+      }
+    }
+
+    if (choice === 'none') {
+      setSaveNotice('Bạn đã chọn không lưu lịch sử cuộc gọi.');
+      return false;
+    }
+
+    if (choice === 'cloud' && user?.type === 'registered') {
       await syncHistory(history.items);
       setSaveNotice('Đã đồng bộ cuộc trò chuyện lên lịch sử đám mây.');
-      return;
+      return true;
     }
 
     await saveHistoryLocal(history);
     setSaveNotice('Đã lưu cuộc trò chuyện vào lịch sử cục bộ.');
+    return true;
   };
   saveLocalHistoryRef.current = saveConversationHistoryIfNeeded;
 
@@ -767,7 +822,7 @@ export default function CallScreen() {
                   {peerStatus === 'connected'
                     ? 'Người kia đang trong phòng'
                     : peerStatus === 'left'
-                      ? 'Khách đã rời phòng, mã vẫn có thể dùng để vào lại'
+                      ? 'Đối tác đã rời phòng'
                       : peerStatus === 'closed'
                         ? 'Phòng đã kết thúc'
                         : roomContext.role === 'host'
@@ -885,7 +940,7 @@ export default function CallScreen() {
                   </View>
                 );
               }}
-              ListEmptyComponent={<Text style={styles.empty}>Chưa có câu nào được dịch. Hãy nói thử một câu để kiểm tra luồng realtime.</Text>}
+              ListEmptyComponent={<Text style={styles.empty}>Bắt đầu nói để dịch...</Text>}
             />
             {!isTimelinePinnedToBottom && (
               <Pressable style={styles.latestBtn} onPress={() => scrollTimelineToLatest(true)}>

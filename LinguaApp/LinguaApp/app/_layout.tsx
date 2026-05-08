@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
 import * as SplashScreen from 'expo-splash-screen';
 import { useAuthStore } from '../src/store/authStore';
+import { useSettingsStore } from '../src/store/settingsStore';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -21,7 +22,10 @@ export default function RootLayout() {
   const loadSession = useAuthStore((s) => s.loadSession);
 
   useEffect(() => {
-    loadSession().then(() => {
+    Promise.all([
+      loadSession(),
+      useSettingsStore.getState().loadSettings()
+    ]).then(() => {
       if (fontsLoaded) SplashScreen.hideAsync();
     });
   }, [fontsLoaded]);
