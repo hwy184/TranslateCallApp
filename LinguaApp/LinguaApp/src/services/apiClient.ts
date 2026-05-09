@@ -14,6 +14,7 @@ async function safeParseJson(response: Response): Promise<JsonValue> {
 
 class ApiClient {
   private guestRecoveryPromise: Promise<boolean> | null = null;
+  private unauthorizedStreak = 0;
 
   private resolveBaseUrl(): string {
     return useAuthStore.getState().apiBaseUrl;
@@ -86,6 +87,9 @@ class ApiClient {
 
     const headers = new Headers(options.headers ?? {});
     headers.set('Content-Type', 'application/json');
+    headers.set('Cache-Control', 'no-cache, no-store, max-age=0, must-revalidate');
+    headers.set('Pragma', 'no-cache');
+    headers.set('Expires', '0');
 
     const baseUrl = this.resolveBaseUrl();
     if (this.shouldBypassNgrokWarning(baseUrl)) {
@@ -105,6 +109,7 @@ class ApiClient {
       response = await fetch(`${baseUrl}${path}`, {
         ...options,
         headers,
+        cache: 'no-store',
         signal: controller.signal,
       });
       payload = await safeParseJson(response);
@@ -132,12 +137,24 @@ class ApiClient {
       if (response.status === 401 && !hasRetried) {
         const recovered = await this.recoverFromUnauthorized(skipAuth);
         if (recovered) {
+          this.unauthorizedStreak = 0;
           return this.request<T>(path, options, skipAuth, true);
         }
+      }
+      if (response.status === 401) {
+        this.unauthorizedStreak += 1;
+        if (this.unauthorizedStreak >= 3) {
+          // Force leave room context after repeated auth rejection to avoid stuck call state.
+          await useAuthStore.getState().setRoomContext(null).catch(() => undefined);
+          this.unauthorizedStreak = 0;
+        }
+      } else {
+        this.unauthorizedStreak = 0;
       }
       throw parsedError;
     }
 
+    this.unauthorizedStreak = 0;
     return payload as T;
   }
 

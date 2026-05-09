@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+﻿import { useMemo } from 'react';
 import { useSettingsStore } from '../store/settingsStore';
 
 type Locale = 'vi' | 'en';
@@ -22,7 +22,11 @@ const dict = {
     language_auto_translate_sub: 'Dịch ngay khi nhận giọng nói',
     language_show_subtitle: 'Hiển thị phụ đề',
     language_show_subtitle_sub: 'Hiện transcript trong cuộc gọi',
-    language_info: 'Ứng dụng chỉ hỗ trợ chuyển đổi giữa tiếng Việt và tiếng Anh. Bạn chỉ cần chọn ngôn ngữ của mình.',
+    language_info: 'Ứng dụng hiện hỗ trợ chuyển đổi giữa tiếng Việt và tiếng Anh. Bạn chỉ cần chọn ngôn ngữ của mình.',
+    language_vi_label: 'Tiếng Việt',
+    language_vi_region: 'Việt Nam',
+    language_en_label: 'Tiếng Anh',
+    language_en_region: 'Hoa Kỳ',
     create_need_login_title: 'Cần đăng nhập',
     create_need_login_msg: 'Vui lòng đăng nhập lại để tạo phòng.',
     create_failed_title: 'Tạo phòng thất bại',
@@ -45,7 +49,23 @@ const dict = {
     login_title_btn: 'Đăng nhập',
     login_no_account: 'Chưa có tài khoản?',
     login_register_now: 'Đăng ký ngay',
-    login_guest_mode: 'Tiếp tục không đăng nhập',
+    login_guest_mode: 'Tiếp tục với tư cách khách',
+    home_title: 'Trang chủ',
+    home_hero_eyebrow: 'Cuộc gọi song ngữ',
+    home_hero_title: 'Nói một câu, bên kia nghe bản dịch bằng giọng AI.',
+    home_hero_subtitle: 'Việt - Anh là luồng chính. Tạo phòng hoặc vào phòng bằng mã, rồi nói chuyện trực tiếp mà không phải qua nhiều bước rườm rà.',
+    home_health_loading: 'Đang kiểm tra kết nối hệ thống...',
+    home_health_ok: 'Hệ thống sẵn sàng cho cuộc gọi realtime.',
+    home_health_warn: 'Một số dịch vụ đang hạn chế, nhưng app vẫn cho thử lại.',
+    home_step_1: 'Tạo hoặc nhập mã phòng',
+    home_step_2: 'Đợi người kia vào phòng',
+    home_step_3: 'Nói và nghe giọng AI dịch',
+    home_create_room: 'Tạo phòng',
+    home_create_room_sub: 'Bắt đầu cuộc gọi mới ngay',
+    home_join_room: 'Nhập mã phòng',
+    home_join_room_sub: 'Tham gia phòng từ host',
+    tab_home: 'Trang chủ',
+    tab_history: 'Lịch sử',
   },
   en: {
     common_back: 'Back',
@@ -66,6 +86,10 @@ const dict = {
     language_show_subtitle: 'Show subtitles',
     language_show_subtitle_sub: 'Show transcript during calls',
     language_info: 'The app currently supports translation between Vietnamese and English only. Just select your own language.',
+    language_vi_label: 'Vietnamese',
+    language_vi_region: 'Vietnam',
+    language_en_label: 'English',
+    language_en_region: 'United States',
     create_need_login_title: 'Sign-in required',
     create_need_login_msg: 'Please sign in again to create a room.',
     create_failed_title: 'Create room failed',
@@ -89,6 +113,22 @@ const dict = {
     login_no_account: "Don't have an account?",
     login_register_now: 'Register now',
     login_guest_mode: 'Continue as guest',
+    home_title: 'Home',
+    home_hero_eyebrow: 'Bilingual voice call',
+    home_hero_title: 'Say one sentence, the other side hears an AI-voiced translation.',
+    home_hero_subtitle: 'Vietnamese and English are the main flow. Create or join a room by code, then talk directly without extra steps.',
+    home_health_loading: 'Checking system connectivity...',
+    home_health_ok: 'System is ready for realtime calls.',
+    home_health_warn: 'Some services are limited, but you can retry in app.',
+    home_step_1: 'Create or enter room code',
+    home_step_2: 'Wait for the other participant',
+    home_step_3: 'Speak and listen to AI translation',
+    home_create_room: 'Create room',
+    home_create_room_sub: 'Start a new call now',
+    home_join_room: 'Enter room code',
+    home_join_room_sub: 'Join a host room',
+    tab_home: 'Home',
+    tab_history: 'History',
   },
 } as const;
 
@@ -106,4 +146,3 @@ export function useI18n() {
     [locale]
   );
 }
-

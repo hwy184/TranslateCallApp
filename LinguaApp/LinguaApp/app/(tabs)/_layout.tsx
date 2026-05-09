@@ -1,9 +1,12 @@
-import { Tabs } from 'expo-router';
+﻿import { Tabs } from 'expo-router';
 import { View, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../src/constants/theme';
+import { useI18n } from '../../src/i18n';
 
 export default function TabLayout() {
+  const { t } = useI18n();
+
   return (
     <Tabs
       screenOptions={{
@@ -23,7 +26,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons name={focused ? 'home' : 'home-outline'} size={22} color={focused ? '#B8F7D4' : color} />
           ),
-          title: 'Trang chủ',
+          title: t('tab_home'),
         }}
       />
       <Tabs.Screen
@@ -36,7 +39,7 @@ export default function TabLayout() {
               color={focused ? '#FFD59A' : color}
             />
           ),
-          title: 'Lịch sử',
+          title: t('tab_history'),
         }}
       />
       <Tabs.Screen

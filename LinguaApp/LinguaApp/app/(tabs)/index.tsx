@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -14,8 +14,10 @@ import { router } from 'expo-router';
 import { Colors, Typography, Spacing, BorderRadius, Shadows } from '../../src/constants/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import { getSystemHealth, type SystemHealth } from '../../src/services/healthService';
+import { useI18n } from '../../src/i18n';
 
 export default function MainScreen() {
+  const { t } = useI18n();
   const user = useAuthStore((s) => s.user);
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [loadingHealth, setLoadingHealth] = useState(true);
@@ -48,7 +50,7 @@ export default function MainScreen() {
           <View style={styles.header}>
             <View>
               <Text style={styles.eyebrow}>LINGUA VOICE</Text>
-              <Text style={styles.headerTitle}>Trang chủ</Text>
+              <Text style={styles.headerTitle}>{t('home_title')}</Text>
             </View>
             <TouchableOpacity style={styles.headerBtn} onPress={() => router.push('/settings')}>
               <Ionicons name="settings-outline" size={22} color={Colors.white} />
@@ -56,24 +58,22 @@ export default function MainScreen() {
           </View>
 
           <View style={styles.heroCard}>
-            <Text style={styles.heroEyebrow}>Cuộc gọi song ngữ</Text>
-            <Text style={styles.heroTitle}>Nói một câu, bên kia nghe bản dịch bằng giọng AI.</Text>
-            <Text style={styles.heroSubtitle}>
-              Việt - Anh là luồng chính. Tạo phòng hoặc vào phòng bằng mã, rồi nói chuyện trực tiếp mà không phải qua nhiều bước rườm rà.
-            </Text>
+            <Text style={styles.heroEyebrow}>{t('home_hero_eyebrow')}</Text>
+            <Text style={styles.heroTitle}>{t('home_hero_title')}</Text>
+            <Text style={styles.heroSubtitle}>{t('home_hero_subtitle')}</Text>
 
             <View style={styles.statRow}>
               <View style={styles.statPill}>
                 <Text style={styles.statValue}>1-1</Text>
-                <Text style={styles.statLabel}>Một chủ phòng, một khách</Text>
+                <Text style={styles.statLabel}>One host, one guest</Text>
               </View>
               <View style={styles.statPill}>
                 <Text style={styles.statValue}>vi/en</Text>
-                <Text style={styles.statLabel}>Chỉ Việt và Anh</Text>
+                <Text style={styles.statLabel}>Vietnamese + English</Text>
               </View>
               <View style={styles.statPill}>
                 <Text style={styles.statValue}>live</Text>
-                <Text style={styles.statLabel}>Dịch realtime</Text>
+                <Text style={styles.statLabel}>Realtime translation</Text>
               </View>
             </View>
           </View>
@@ -92,16 +92,16 @@ export default function MainScreen() {
               )}
               <Text style={styles.healthText}>
                 {loadingHealth
-                  ? 'Đang kiểm tra kết nối hệ thống...'
+                  ? t('home_health_loading')
                   : health?.status === 'ok'
-                    ? 'Hệ thống sẵn sàng cho cuộc gọi realtime.'
-                    : 'Một số dịch vụ đang hạn chế, nhưng app vẫn cho thử lại.'}
+                    ? t('home_health_ok')
+                    : t('home_health_warn')}
               </Text>
             </View>
             {!loadingHealth && health && health.status !== 'ok' && (
               <Text style={styles.healthDetail}>
-                {health.db === 'unreachable' ? 'Cơ sở dữ liệu chưa phản hồi. ' : ''}
-                {health.worker === 'unreachable' ? 'Worker AI chưa sẵn sàng.' : ''}
+                {health.db === 'unreachable' ? 'Database unavailable. ' : ''}
+                {health.worker === 'unreachable' ? 'AI worker unavailable.' : ''}
               </Text>
             )}
           </View>
@@ -112,19 +112,19 @@ export default function MainScreen() {
                 <View style={styles.flowDot}>
                   <Text style={styles.flowDotText}>1</Text>
                 </View>
-                <Text style={styles.flowText}>Tạo hoặc nhập mã phòng</Text>
+                <Text style={styles.flowText}>{t('home_step_1')}</Text>
               </View>
               <View style={styles.flowStep}>
                 <View style={styles.flowDot}>
                   <Text style={styles.flowDotText}>2</Text>
                 </View>
-                <Text style={styles.flowText}>Đợi người kia vào phòng</Text>
+                <Text style={styles.flowText}>{t('home_step_2')}</Text>
               </View>
               <View style={styles.flowStep}>
                 <View style={styles.flowDot}>
                   <Text style={styles.flowDotText}>3</Text>
                 </View>
-                <Text style={styles.flowText}>Nói và nghe giọng AI dịch</Text>
+                <Text style={styles.flowText}>{t('home_step_3')}</Text>
               </View>
             </View>
           </View>
@@ -139,8 +139,8 @@ export default function MainScreen() {
                 <Ionicons name="add" size={20} color={Colors.white} />
               </View>
               <View style={styles.actionTextBlock}>
-                <Text style={styles.actionTitle}>Tạo phòng</Text>
-                <Text style={styles.actionSubtitle}>Bắt đầu cuộc gọi mới ngay</Text>
+                <Text style={styles.actionTitle}>{t('home_create_room')}</Text>
+                <Text style={styles.actionSubtitle}>{t('home_create_room_sub')}</Text>
               </View>
             </TouchableOpacity>
 
@@ -153,14 +153,14 @@ export default function MainScreen() {
                 <Ionicons name="enter-outline" size={20} color={Colors.white} />
               </View>
               <View style={styles.actionTextBlock}>
-                <Text style={styles.actionTitle}>Nhập mã phòng</Text>
-                <Text style={styles.actionSubtitle}>Tham gia phòng từ host</Text>
+                <Text style={styles.actionTitle}>{t('home_join_room')}</Text>
+                <Text style={styles.actionSubtitle}>{t('home_join_room_sub')}</Text>
               </View>
             </TouchableOpacity>
           </View>
 
           <Text style={styles.footerNote}>
-            Đăng nhập bởi {user?.displayName ?? 'Người dùng'}.
+            Signed in as {user?.displayName ?? 'User'}.
           </Text>
         </ScrollView>
       </SafeAreaView>

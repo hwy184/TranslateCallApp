@@ -17,6 +17,7 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
+COPY src/db/migrations ./src/db/migrations
 
 EXPOSE 8080
 CMD ["sh", "-c", "node dist/db/migrate.js && node dist/index.js"]

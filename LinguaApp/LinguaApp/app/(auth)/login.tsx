@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -19,7 +19,7 @@ import { Colors, Typography, Spacing, BorderRadius } from '../../src/constants/t
 import { useAuthStore } from '../../src/store/authStore';
 import { login, loginGuest } from '../../src/services/authService';
 import { syncLocalHistoryToCloud } from '../../src/services/historyService';
-import { friendlyErrorMessage } from '../../src/services/errors';
+import { ApiClientError, friendlyErrorMessage } from '../../src/services/errors';
 import { LinguaLogo } from '../../src/components/LinguaLogo';
 import { GlobeIllustration } from '../../src/components/GlobeIllustration';
 import { useI18n } from '../../src/i18n';
@@ -43,13 +43,45 @@ export default function LoginScreen() {
       return;
     }
 
-    setIsLoading(true);
-    try {
-      const res = await login({ email: email.trim(), password });
+    const runLogin = async (forceLogoutOthers: boolean) => {
+      const res = await login({ email: email.trim(), password, forceLogoutOthers });
       await setAuth(res.user, res.session);
       await syncLocalHistoryToCloud().catch(() => 0);
       router.replace('/(tabs)');
+    };
+
+    setIsLoading(true);
+    try {
+      await runLogin(false);
     } catch (err: unknown) {
+      if (err instanceof ApiClientError && err.code === 'AUTH_CONFIRM_REQUIRED') {
+        setIsLoading(false);
+        Alert.alert(
+          'Phiên đang hoạt động',
+          'Tài khoản đang đăng nhập ở thiết bị khác. Bạn có muốn đăng xuất thiết bị kia và đăng nhập ở thiết bị này không?',
+          [
+            { text: 'Không', style: 'cancel' },
+            {
+              text: 'Đăng nhập tại đây',
+              style: 'destructive',
+              onPress: () => {
+                void (async () => {
+                  setIsLoading(true);
+                  try {
+                    await runLogin(true);
+                  } catch (forceErr) {
+                    Alert.alert(t('login_failed_title'), friendlyErrorMessage(forceErr));
+                  } finally {
+                    setIsLoading(false);
+                  }
+                })();
+              },
+            },
+          ],
+          { cancelable: true }
+        );
+        return;
+      }
       Alert.alert(t('login_failed_title'), friendlyErrorMessage(err));
     } finally {
       setIsLoading(false);
@@ -95,7 +127,7 @@ export default function LoginScreen() {
               <GlobeIllustration />
             </View>
 
-            <Text style={styles.tagline}>K?T N?I M?I NG�N NG?</Text>
+            <Text style={styles.tagline}>KET NOI MOI NGON NGU</Text>
 
             <View style={styles.formCard}>
               <Text style={styles.inputLabel}>Email</Text>

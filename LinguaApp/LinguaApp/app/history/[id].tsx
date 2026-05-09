@@ -32,7 +32,7 @@ function speakerRole(identity: string): 'host' | 'guest' | null {
 }
 
 export default function HistoryDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, source } = useLocalSearchParams<{ id: string; source?: 'cloud' | 'local' }>();
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState('');
   const [detail, setDetail] = useState<ConversationHistory | null>(null);
@@ -41,9 +41,10 @@ export default function HistoryDetailScreen() {
   const [playingLineId, setPlayingLineId] = useState<string | null>(null);
 
   const user = useAuthStore((s) => s.user);
-  const historySourceLabel = user?.type === 'registered' ? 'Lịch sử đám mây' : 'Lịch sử cục bộ';
+  const effectiveSource = user?.type === 'registered' ? (source === 'local' ? 'local' : 'cloud') : 'local';
+  const historySourceLabel = effectiveSource === 'cloud' ? 'Lịch sử đám mây' : 'Lịch sử cục bộ';
   const historySourceHint =
-    user?.type === 'registered'
+    effectiveSource === 'cloud'
       ? 'Cuộc trò chuyện này được lưu trên máy chủ và đồng bộ vào tài khoản của bạn.'
       : 'Cuộc trò chuyện này chỉ được lưu trên thiết bị hiện tại.';
   const detectedRoles = new Set(
@@ -70,7 +71,7 @@ export default function HistoryDetailScreen() {
 
       setLoading(true);
       try {
-        if (user?.type === 'registered') {
+        if (effectiveSource === 'cloud') {
           const data = await getHistoryDetail(id);
           if (!active) return;
           setDetail(data);
@@ -95,7 +96,7 @@ export default function HistoryDetailScreen() {
     return () => {
       active = false;
     };
-  }, [id, user?.type]);
+  }, [effectiveSource, id]);
 
   useEffect(() => {
     return () => {
@@ -112,7 +113,7 @@ export default function HistoryDetailScreen() {
         style: 'destructive',
         onPress: async () => {
           try {
-            if (user?.type === 'registered') {
+            if (effectiveSource === 'cloud') {
               await deleteConversation(id);
             } else {
               await deleteHistoryLocal(id);

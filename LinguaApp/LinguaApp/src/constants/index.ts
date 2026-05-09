@@ -16,8 +16,8 @@ export const ROOM_CODE_LENGTH = 6;
 
 // Languages supported
 export const LANGUAGES = [
-  { code: 'vi', label: 'Tiếng Việt', flag: 'VN' },
-  { code: 'en', label: 'Tiếng Anh', flag: 'EN' },
+  { code: 'vi', label: 'Tiếng Việt', flag: '🇻🇳' },
+  { code: 'en', label: 'English', flag: '🇺🇸' },
 ];
 
 // AsyncStorage Keys

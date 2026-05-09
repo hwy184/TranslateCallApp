@@ -40,28 +40,33 @@ export function parseBackendError(status: number, payload: unknown): ApiClientEr
 
 export function friendlyErrorMessage(error: unknown): string {
   if (!(error instanceof ApiClientError)) {
-    return 'Loi ket noi mang. Kiem tra API URL va internet.';
+    if (error instanceof Error && error.message === 'history_empty') {
+      return 'Chưa có dữ liệu lịch sử cho phiên này.';
+    }
+    return 'Lỗi kết nối mạng. Vui lòng kiểm tra internet rồi thử lại.';
   }
 
   switch (error.code) {
     case 'NETWORK_TIMEOUT':
-      return 'Request timeout. Mang yeu hoac backend cham phan hoi.';
+      return 'Yêu cầu quá thời gian. Mạng yếu hoặc backend phản hồi chậm.';
     case 'NETWORK_ERROR':
-      return 'Khong ket noi duoc backend.';
+      return 'Không kết nối được backend.';
     case 'VALIDATION_ERROR':
-      return 'Du lieu gui len khong hop le.';
+      return 'Dữ liệu gửi lên không hợp lệ.';
     case 'ROOM_NOT_FOUND':
-      return 'Khong tim thay room.';
+      return 'Không tìm thấy phòng.';
     case 'ROOM_ENDED':
-      return 'Room da ket thuc.';
+      return 'Phòng đã kết thúc.';
     case 'ROOM_ALREADY_HAS_GUEST':
-      return 'Room da co guest.';
+      return 'Phòng đã có khách.';
     case 'WORKER_START_FAILED':
-      return 'AI worker start that bai. Thu lai sau.';
+      return 'Khởi động AI worker thất bại. Thử lại sau.';
     case 'USER_NOT_REGISTERED':
-      return 'Guest chi luu local, khong sync cloud.';
+      return 'Tài khoản khách chỉ lưu cục bộ, không đồng bộ cloud.';
+    case 'HISTORY_CLOUD_LIMIT_REACHED':
+      return 'Cloud đã đạt giới hạn 20 cuộc hội thoại. Hãy xóa bớt trên mục Đám mây rồi sync lại.';
     case 'SESSION_NOT_FOUND':
-      return 'Session khong ton tai.';
+      return 'Phiên không tồn tại.';
     default:
       return `${error.message} (${error.code})`;
   }

@@ -16,17 +16,16 @@ import { LinguaLogo } from '../src/components/LinguaLogo';
 import { useSettingsStore } from '../src/store/settingsStore';
 import { useI18n } from '../src/i18n';
 
-const LANGUAGES = [
-  { code: 'vi', label: 'Ti?ng Vi?t', flag: '????', region: 'Vi?t Nam' },
-  { code: 'en', label: 'English', flag: '????', region: 'United States' },
-];
-
 export default function LanguageSettingsScreen() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { myLang, autoTranslate, showSubtitle, setSettings } = useSettingsStore();
   const [pickingFor, setPickingFor] = useState<null | 'my'>(null);
+  const LANGUAGES = [
+    { code: 'vi', label: t('language_vi_label'), flag: '🇻🇳', region: t('language_vi_region') },
+    { code: 'en', label: t('language_en_label'), flag: '🇺🇸', region: t('language_en_region') },
+  ] as const;
 
-  const myLangInfo = LANGUAGES.find((l) => l.code === myLang);
+  const myLangInfo = LANGUAGES.find((l) => l.code === myLang) ?? LANGUAGES[locale === 'en' ? 1 : 0];
 
   return (
     <LinearGradient

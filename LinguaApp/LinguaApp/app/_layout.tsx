@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { AppState } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -7,6 +8,8 @@ import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_7
 import * as SplashScreen from 'expo-splash-screen';
 import { useAuthStore } from '../src/store/authStore';
 import { useSettingsStore } from '../src/store/settingsStore';
+import apiClient from '../src/services/apiClient';
+import { ApiClientError } from '../src/services/errors';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -20,6 +23,8 @@ export default function RootLayout() {
   });
 
   const loadSession = useAuthStore((s) => s.loadSession);
+  const user = useAuthStore((s) => s.user);
+  const session = useAuthStore((s) => s.session);
 
   useEffect(() => {
     Promise.all([
@@ -29,6 +34,40 @@ export default function RootLayout() {
       if (fontsLoaded) SplashScreen.hideAsync();
     });
   }, [fontsLoaded]);
+
+  useEffect(() => {
+    if (user?.type !== 'registered' || !session?.accessToken) return;
+
+    let stopped = false;
+    const heartbeat = async () => {
+      if (stopped) return;
+      try {
+        await apiClient.get('/auth/session');
+      } catch (error) {
+        if (error instanceof ApiClientError && error.status === 404) {
+          // Fallback for older backend versions without /auth/session.
+          await apiClient.get('/history?limit=1').catch(() => undefined);
+        }
+      }
+    };
+
+    void heartbeat();
+    const timer = setInterval(() => {
+      void heartbeat();
+    }, 15000);
+
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void heartbeat();
+      }
+    });
+
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      appStateSub.remove();
+    };
+  }, [session?.accessToken, user?.type]);
 
   if (!fontsLoaded) return null;
 
