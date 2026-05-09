@@ -13,19 +13,19 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { Colors, Typography, Spacing, BorderRadius } from '../src/constants/theme';
 import { LinguaLogo } from '../src/components/LinguaLogo';
-
-const LANGUAGES = [
-  { code: 'vi', label: 'Tiếng Việt', flag: '🇻🇳', region: 'Việt Nam' },
-  { code: 'en', label: 'Tiếng Anh', flag: '🇺🇸', region: 'Hoa Kỳ' },
-];
+import { useSettingsStore } from '../src/store/settingsStore';
+import { useI18n } from '../src/i18n';
 
 export default function LanguageSettingsScreen() {
-  const [myLang, setMyLang] = useState('vi');
-  const [autoTranslate, setAutoTranslate] = useState(true);
-  const [showSubtitle, setShowSubtitle] = useState(true);
+  const { t, locale } = useI18n();
+  const { myLang, autoTranslate, showSubtitle, setSettings } = useSettingsStore();
   const [pickingFor, setPickingFor] = useState<null | 'my'>(null);
+  const LANGUAGES = [
+    { code: 'vi', label: t('language_vi_label'), flag: '🇻🇳', region: t('language_vi_region') },
+    { code: 'en', label: t('language_en_label'), flag: '🇺🇸', region: t('language_en_region') },
+  ] as const;
 
-  const myLangInfo = LANGUAGES.find((l) => l.code === myLang);
+  const myLangInfo = LANGUAGES.find((l) => l.code === myLang) ?? LANGUAGES[locale === 'en' ? 1 : 0];
 
   return (
     <LinearGradient
@@ -45,9 +45,9 @@ export default function LanguageSettingsScreen() {
         </View>
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-          <Text style={styles.pageTitle}>Ngôn ngữ & Dịch thuật</Text>
+          <Text style={styles.pageTitle}>{t('language_title')}</Text>
 
-          <Text style={styles.sectionLabel}>NGÔN NGỮ CỦA BẠN</Text>
+          <Text style={styles.sectionLabel}>{t('language_my_language')}</Text>
           <View style={styles.card}>
             <TouchableOpacity
               style={styles.langRow}
@@ -77,7 +77,7 @@ export default function LanguageSettingsScreen() {
                       lang.code === myLang && styles.dropdownRowSelected,
                     ]}
                     onPress={() => {
-                      setMyLang(lang.code);
+                      setSettings({ myLang: lang.code });
                       setPickingFor(null);
                     }}
                     activeOpacity={0.7}
@@ -93,16 +93,16 @@ export default function LanguageSettingsScreen() {
             )}
           </View>
 
-          <Text style={styles.sectionLabel}>CÀI ĐẶT DỊCH THUẬT</Text>
+          <Text style={styles.sectionLabel}>{t('language_translation_settings')}</Text>
           <View style={styles.card}>
             <View style={styles.toggleRow}>
               <View style={styles.toggleInfo}>
-                <Text style={styles.toggleTitle}>Tự động dịch</Text>
-                <Text style={styles.toggleSub}>Dịch ngay khi nhận giọng nói</Text>
+                <Text style={styles.toggleTitle}>{t('language_auto_translate')}</Text>
+                <Text style={styles.toggleSub}>{t('language_auto_translate_sub')}</Text>
               </View>
               <Switch
                 value={autoTranslate}
-                onValueChange={setAutoTranslate}
+                onValueChange={(val) => setSettings({ autoTranslate: val })}
                 trackColor={{ false: 'rgba(255,255,255,0.2)', true: Colors.primary }}
                 thumbColor={Colors.white}
               />
@@ -112,12 +112,12 @@ export default function LanguageSettingsScreen() {
 
             <View style={styles.toggleRow}>
               <View style={styles.toggleInfo}>
-                <Text style={styles.toggleTitle}>Hiển thị phụ đề</Text>
-                <Text style={styles.toggleSub}>Hiện transcript trong cuộc gọi</Text>
+                <Text style={styles.toggleTitle}>{t('language_show_subtitle')}</Text>
+                <Text style={styles.toggleSub}>{t('language_show_subtitle_sub')}</Text>
               </View>
               <Switch
                 value={showSubtitle}
-                onValueChange={setShowSubtitle}
+                onValueChange={(val) => setSettings({ showSubtitle: val })}
                 trackColor={{ false: 'rgba(255,255,255,0.2)', true: Colors.primary }}
                 thumbColor={Colors.white}
               />
@@ -126,9 +126,7 @@ export default function LanguageSettingsScreen() {
 
           <View style={styles.infoBox}>
             <Ionicons name="information-circle-outline" size={16} color="rgba(255,255,255,0.6)" />
-            <Text style={styles.infoText}>
-              Ứng dụng chỉ hỗ trợ chuyển đổi giữa tiếng Việt và tiếng Anh. Bạn chỉ cần chọn ngôn ngữ của mình.
-            </Text>
+            <Text style={styles.infoText}>{t('language_info')}</Text>
           </View>
         </ScrollView>
       </SafeAreaView>

@@ -21,21 +21,36 @@ import {
   deleteHistoryLocal,
   getHistory,
   getHistoryLocal,
+  reconcileLocalSyncStateWithCloud,
+  syncOneLocalConversationToCloud,
+  syncLocalHistoryToCloud,
   type ConversationHistory,
 } from '../../src/services/historyService';
 import { friendlyErrorMessage } from '../../src/services/errors';
+
+type HistorySource = 'cloud' | 'local';
 
 export default function HistoryScreen() {
   const [history, setHistory] = useState<ConversationHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState<HistorySource>('cloud');
   const user = useAuthStore((s) => s.user);
-  const historySourceLabel = user?.type === 'registered' ? 'Đám mây' : 'Cục bộ';
+  const effectiveSource: HistorySource = user?.type === 'registered' ? source : 'local';
+  const historySourceLabel = effectiveSource === 'cloud' ? 'Đám mây' : 'Cục bộ';
 
   const loadHistory = useCallback(async () => {
     setLoading(true);
     try {
-      const items = user?.type === 'registered' ? await getHistory() : await getHistoryLocal();
+      let items: ConversationHistory[] = [];
+      if (effectiveSource === 'cloud') {
+        items = await getHistory();
+      } else {
+        if (user?.type === 'registered') {
+          await reconcileLocalSyncStateWithCloud().catch(() => 0);
+        }
+        items = await getHistoryLocal();
+      }
       setHistory(items);
       setError(null);
     } catch (err: unknown) {
@@ -43,7 +58,7 @@ export default function HistoryScreen() {
     } finally {
       setLoading(false);
     }
-  }, [user?.type]);
+  }, [effectiveSource, user?.type]);
 
   useEffect(() => {
     void loadHistory();
@@ -57,8 +72,9 @@ export default function HistoryScreen() {
         style: 'destructive',
         onPress: async () => {
           try {
-            if (user?.type === 'registered') {
+            if (effectiveSource === 'cloud') {
               await deleteConversation(id);
+              await reconcileLocalSyncStateWithCloud().catch(() => 0);
             } else {
               await deleteHistoryLocal(id);
             }
@@ -80,8 +96,9 @@ export default function HistoryScreen() {
         style: 'destructive',
         onPress: async () => {
           try {
-            if (user?.type === 'registered') {
+            if (effectiveSource === 'cloud') {
               await deleteAllHistoryCloud();
+              await reconcileLocalSyncStateWithCloud().catch(() => 0);
             } else {
               await deleteAllHistoryLocal();
             }
@@ -97,7 +114,7 @@ export default function HistoryScreen() {
   const renderItem = ({ item }: { item: ConversationHistory }) => (
     <TouchableOpacity
       style={styles.historyCard}
-      onPress={() => router.push(`/history/${item.id}`)}
+      onPress={() => router.push(`/history/${item.id}?source=${effectiveSource}`)}
       activeOpacity={0.8}
     >
       <View style={styles.historyIcon}>
@@ -127,6 +144,23 @@ export default function HistoryScreen() {
       >
         <Ionicons name="trash-outline" size={18} color="rgba(229,57,53,0.7)" />
       </TouchableOpacity>
+      {user?.type === 'registered' && effectiveSource === 'local' && !item.is_synced && (
+        <TouchableOpacity
+          style={styles.uploadBtn}
+          onPress={async () => {
+            try {
+              await syncOneLocalConversationToCloud(item.id);
+              await reconcileLocalSyncStateWithCloud().catch(() => 0);
+              await loadHistory();
+            } catch (err: unknown) {
+              Alert.alert('Đồng bộ thất bại', friendlyErrorMessage(err));
+            }
+          }}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="cloud-upload-outline" size={18} color="rgba(67,160,71,0.95)" />
+        </TouchableOpacity>
+      )}
     </TouchableOpacity>
   );
 
@@ -142,17 +176,21 @@ export default function HistoryScreen() {
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Lịch sử dịch</Text>
           <View style={styles.headerActions}>
-            <View style={styles.sourceBadge}>
+            <TouchableOpacity
+              style={styles.sourceBadge}
+              onPress={() => {
+                if (user?.type !== 'registered') return;
+                setSource((current) => (current === 'cloud' ? 'local' : 'cloud'));
+              }}
+              activeOpacity={user?.type === 'registered' ? 0.8 : 1}
+            >
               <Text style={styles.sourceBadgeText}>{historySourceLabel}</Text>
-            </View>
+            </TouchableOpacity>
             {!!history.length && (
               <TouchableOpacity style={styles.syncBtn} onPress={handleDeleteAll}>
                 <Ionicons name="trash-outline" size={20} color={Colors.white} />
               </TouchableOpacity>
             )}
-            <TouchableOpacity style={styles.syncBtn} onPress={() => void loadHistory()}>
-              <Ionicons name="refresh" size={20} color={Colors.white} />
-            </TouchableOpacity>
           </View>
         </View>
 
@@ -272,6 +310,9 @@ const styles = StyleSheet.create({
   },
   tagText: { fontSize: 10, color: 'rgba(255,255,255,0.65)' },
   deleteBtn: {
+    padding: 4,
+  },
+  uploadBtn: {
     padding: 4,
   },
   emptyState: {

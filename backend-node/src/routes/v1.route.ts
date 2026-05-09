@@ -33,7 +33,8 @@ const authRegisterSchema = z.object({
 
 const authLoginSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(1)
+  password: z.string().min(1),
+  force_logout_others: z.boolean().optional()
 });
 
 const authLogoutSchema = z.object({
@@ -310,6 +311,21 @@ v1Router.post("/auth/login", async (req, res) => {
     if (!ok) {
       sendError(res, 401, ERROR_CODES.AUTH_INVALID_CREDENTIALS, "Invalid credentials");
       return;
+    }
+
+    const activeSessions = await persistence.countActiveAuthSessions(result.user.userId);
+    if (activeSessions > 0 && !payload.force_logout_others) {
+      sendError(
+        res,
+        409,
+        ERROR_CODES.AUTH_CONFIRM_REQUIRED,
+        "Another active session exists",
+        { active_sessions: activeSessions }
+      );
+      return;
+    }
+    if (activeSessions > 0 && payload.force_logout_others) {
+      await persistence.revokeAllActiveAuthSessionsForUser(result.user.userId);
     }
 
     const accessToken = issueJwt(result.user.userId, "registered");
@@ -710,16 +726,12 @@ v1Router.get("/history", async (req, res) => {
       return;
     }
     const query = historyQuerySchema.parse(req.query);
-    if (!query.session_id) {
-      sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "session_id is required");
-      return;
-    }
-    const canAccess = await persistence.userHasSessionAccess(auth.userId, query.session_id);
-    if (!canAccess) {
-      sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "You do not have access to this history session");
-      return;
-    }
-    const items = await persistence.listHistory({ roomId: query.room_id, sessionId: query.session_id, limit: query.limit });
+    const items = await persistence.listHistory({
+      roomId: query.room_id,
+      sessionId: query.session_id,
+      userId: auth.userId,
+      limit: query.limit
+    });
     res.status(200).json({ items });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -740,15 +752,31 @@ v1Router.post("/history/sync", async (req, res) => {
       return;
     }
     const payload = historySyncSchema.parse(req.body);
-    const sessionIds = new Set(payload.items.map((item) => item.session_id));
-    for (const sessionId of sessionIds) {
-      const canAccess = await persistence.userHasSessionAccess(auth.userId, sessionId);
-      if (!canAccess) {
-        sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, `No access to session ${sessionId}`);
-        return;
-      }
+    const maxCloudConversations = 20;
+    const incomingConversationIds = Array.from(new Set(payload.items.map((item) => item.conversation_id)));
+    const ownedIncoming = await persistence.getOwnedConversationIds(auth.userId, incomingConversationIds);
+    const newIncomingCount = incomingConversationIds.filter((id) => !ownedIncoming.has(id)).length;
+    const currentOwnedCount = await persistence.countOwnedConversations(auth.userId);
+    const availableSlots = Math.max(0, maxCloudConversations - currentOwnedCount);
+    if (newIncomingCount > availableSlots) {
+      sendError(
+        res,
+        409,
+        ERROR_CODES.HISTORY_CLOUD_LIMIT_REACHED,
+        "Cloud history conversation limit reached",
+        {
+          max_conversations: maxCloudConversations,
+          current_conversations: currentOwnedCount,
+          incoming_new_conversations: newIncomingCount,
+          available_slots: availableSlots
+        }
+      );
+      return;
     }
-    const inserted = await persistence.syncHistoryItems(payload.items as Array<Omit<HistoryItem, "id">>);
+    const inserted = await persistence.syncHistoryItems(
+      payload.items as Array<Omit<HistoryItem, "id">>,
+      auth.userId
+    );
     res.status(200).json({ synced: inserted, received: payload.items.length });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -770,12 +798,7 @@ v1Router.patch("/history/conversations/:conversationId/title", async (req, res) 
     }
     const conversationId = z.string().min(1).parse(req.params.conversationId);
     const payload = historyRenameSchema.parse(req.body);
-    const sessionId = await persistence.getConversationSessionId(conversationId);
-    if (!sessionId) {
-      sendError(res, 404, ERROR_CODES.HISTORY_NOT_FOUND, "Conversation was not found");
-      return;
-    }
-    const canAccess = await persistence.userHasSessionAccess(auth.userId, sessionId);
+    const canAccess = await persistence.userOwnsConversation(auth.userId, conversationId);
     if (!canAccess) {
       sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "You do not have access to this conversation");
       return;
@@ -809,17 +832,12 @@ v1Router.delete("/history/:id", async (req, res) => {
       return;
     }
     const id = z.coerce.number().int().positive().parse(req.params.id);
-    const historyItem = await persistence.getHistoryItemById(id);
+    const historyItem = await persistence.getHistoryItemByIdForUser(id, auth.userId);
     if (!historyItem) {
       sendError(res, 404, ERROR_CODES.HISTORY_NOT_FOUND, "History item was not found");
       return;
     }
-    const canAccess = await persistence.userHasSessionAccess(auth.userId, historyItem.session_id);
-    if (!canAccess) {
-      sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "You do not have access to this history item");
-      return;
-    }
-    const removed = await persistence.deleteHistoryItem(id);
+    const removed = await persistence.deleteHistoryItemForUser(id, auth.userId);
     if (!removed) {
       sendError(res, 404, ERROR_CODES.HISTORY_NOT_FOUND, "History item was not found");
       return;
@@ -835,12 +853,30 @@ v1Router.delete("/history/:id", async (req, res) => {
   }
 });
 
-v1Router.delete("/history", async (_req, res) => {
+v1Router.delete("/history", async (req, res) => {
   try {
-    sendError(res, 403, ERROR_CODES.AUTH_FORBIDDEN, "Delete all history is disabled");
+    const auth = await requireAuth(req, res);
+    if (!auth) return;
+    if (auth.role !== "registered") {
+      res.status(200).json({ deleted: 0 });
+      return;
+    }
+    const deleted = await persistence.deleteAllHistoryForUser(auth.userId);
+    res.status(200).json({ deleted });
   } catch (error) {
     const message = error instanceof Error ? error.message : "delete_all_history_failed";
     sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Delete history failed", message);
+  }
+});
+
+v1Router.get("/auth/session", async (req, res) => {
+  try {
+    const auth = await requireAuth(req, res);
+    if (!auth) return;
+    res.status(200).json({ active: true, user_id: auth.userId, role: auth.role });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "auth_session_check_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Session check failed", message);
   }
 });
 
@@ -880,6 +916,26 @@ v1Router.get("/internal/worker/events", async (_req, res) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "list_worker_events_failed";
     sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "List worker events failed", message);
+  }
+});
+
+v1Router.get("/internal/history/ownership/:sessionId", async (req, res) => {
+  try {
+    const workerSecret = typeof req.headers["x-worker-secret"] === "string" ? req.headers["x-worker-secret"] : "";
+    if (!workerSecret || workerSecret !== env.WORKER_INTERNAL_SECRET) {
+      sendError(res, 401, ERROR_CODES.AUTH_UNAUTHORIZED, "Invalid worker secret");
+      return;
+    }
+    const sessionId = z.string().min(1).parse(req.params.sessionId);
+    const debug = await persistence.getSessionOwnershipDebug(sessionId);
+    res.status(200).json({ debug });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      sendError(res, 400, ERROR_CODES.VALIDATION_ERROR, "Invalid session id", error.issues);
+      return;
+    }
+    const message = error instanceof Error ? error.message : "ownership_debug_failed";
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, "Ownership debug failed", message);
   }
 });
 

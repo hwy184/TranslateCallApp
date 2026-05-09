@@ -261,6 +261,45 @@ export const persistence = {
     return mapRoom(result.rows[0]);
   },
 
+  async countActiveAuthSessions(userId: string): Promise<number> {
+    const result = await pool.query(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM auth_sessions
+        WHERE user_id = $1 AND revoked_at IS NULL
+      `,
+      [userId]
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  },
+
+  async revokeAllActiveAuthSessionsForUser(userId: string): Promise<number> {
+    const result = await pool.query(
+      `
+        UPDATE auth_sessions
+        SET revoked_at = NOW()
+        WHERE user_id = $1 AND revoked_at IS NULL
+      `,
+      [userId]
+    );
+    return result.rowCount ?? 0;
+  },
+
+  async listOpenRoomsCreatedBefore(cutoffIso: string, limit = 200): Promise<Room[]> {
+    const boundedLimit = Math.max(1, Math.min(1000, limit));
+    const result = await pool.query(
+      `
+        SELECT room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
+        FROM rooms
+        WHERE status <> 'closed' AND created_at <= $1::timestamptz
+        ORDER BY created_at ASC
+        LIMIT $2
+      `,
+      [cutoffIso, boundedLimit]
+    );
+    return result.rows.map((row) => mapRoom(row));
+  },
+
   async joinRoom(input: {
     roomId: string;
     guestUserId: string;
@@ -304,7 +343,7 @@ export const persistence = {
       const updatedRoomResult = await client.query(
         `
           UPDATE rooms
-          SET guest_participant_id = $1, status = 'active'
+          SET guest_participant_id = $1, status = 'active', created_at = NOW()
           WHERE room_id = $2
           RETURNING room_id, room_code, session_id, host_participant_id, guest_participant_id, status, provider_profile, supported_languages, created_at, ended_at
         `,
@@ -510,7 +549,7 @@ export const persistence = {
       .map((row) => ({ ...(row.payload as Record<string, unknown>), received_at: new Date(String(row.received_at)).toISOString() }));
   },
 
-  async listHistory(input: { roomId?: string; sessionId?: string; limit?: number }): Promise<HistoryItem[]> {
+  async listHistory(input: { roomId?: string; sessionId?: string; userId?: string; limit?: number }): Promise<HistoryItem[]> {
     const boundedLimit = Math.max(1, Math.min(500, input.limit ?? 100));
     const clauses: string[] = [];
     const params: Array<string | number> = [];
@@ -523,6 +562,18 @@ export const persistence = {
       params.push(input.sessionId);
       clauses.push(`session_id = $${params.length}`);
     }
+    if (input.userId) {
+      params.push(input.userId);
+      clauses.push(
+        `EXISTS (
+          SELECT 1
+          FROM transcript_item_owners tio
+          WHERE tio.transcript_item_id = transcript_items.id
+            AND tio.user_id = $${params.length}
+        )`
+      );
+    }
+    clauses.push("deleted_at IS NULL");
 
     params.push(boundedLimit);
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -586,7 +637,7 @@ export const persistence = {
           event_type,
           created_at
         FROM transcript_items
-        WHERE id = $1
+        WHERE id = $1 AND deleted_at IS NULL
         LIMIT 1
       `,
       [id]
@@ -642,7 +693,108 @@ export const persistence = {
     return result.rowCount ?? 0;
   },
 
-  async syncHistoryItems(items: Array<Omit<HistoryItem, "id" | "created_at"> & { created_at?: string }>): Promise<number> {
+  async getHistoryItemByIdForUser(id: number, userId: string): Promise<HistoryItem | undefined> {
+    const result = await pool.query(
+      `
+        SELECT
+          t.id,
+          t.room_id,
+          t.session_id,
+          t.conversation_id,
+          t.title,
+          t.title_updated_at,
+          t.utterance_id,
+          t.speaker_identity,
+          t.source_lang,
+          t.target_lang,
+          t.source_text,
+          t.translated_text,
+          t.event_type,
+          t.created_at
+        FROM transcript_items t
+        JOIN transcript_item_owners tio ON tio.transcript_item_id = t.id
+        WHERE t.id = $1 AND tio.user_id = $2 AND t.deleted_at IS NULL
+        LIMIT 1
+      `,
+      [id, userId]
+    );
+    if ((result.rowCount ?? 0) === 0) return undefined;
+    const row = result.rows[0];
+    return {
+      id: Number(row.id),
+      room_id: String(row.room_id),
+      session_id: String(row.session_id),
+      conversation_id: String(row.conversation_id),
+      title: String(row.title),
+      title_updated_at: new Date(String(row.title_updated_at)).toISOString(),
+      utterance_id: String(row.utterance_id),
+      speaker_identity: String(row.speaker_identity),
+      source_lang: String(row.source_lang),
+      target_lang: String(row.target_lang),
+      source_text: row.source_text ? String(row.source_text) : null,
+      translated_text: row.translated_text ? String(row.translated_text) : null,
+      event_type: String(row.event_type),
+      created_at: new Date(String(row.created_at)).toISOString()
+    };
+  },
+
+  async deleteHistoryItemForUser(id: number, userId: string): Promise<boolean> {
+    return withTransaction(async (client) => {
+      const ownerDelete = await client.query(
+        `
+          DELETE FROM transcript_item_owners
+          WHERE transcript_item_id = $1 AND user_id = $2
+        `,
+        [id, userId]
+      );
+      if ((ownerDelete.rowCount ?? 0) === 0) return false;
+
+      const remaining = await client.query(
+        `SELECT COUNT(*)::int AS count FROM transcript_item_owners WHERE transcript_item_id = $1`,
+        [id]
+      );
+      const count = Number(remaining.rows[0]?.count ?? 0);
+      if (count === 0) {
+        await client.query(`UPDATE transcript_items SET deleted_at = NOW() WHERE id = $1`, [id]);
+      }
+      return true;
+    });
+  },
+
+  async deleteAllHistoryForUser(userId: string): Promise<number> {
+    return withTransaction(async (client) => {
+      const ownedRows = await client.query(
+        `SELECT transcript_item_id FROM transcript_item_owners WHERE user_id = $1`,
+        [userId]
+      );
+      const ids = ownedRows.rows.map((r) => Number(r.transcript_item_id));
+      if (!ids.length) return 0;
+
+      await client.query(`DELETE FROM transcript_item_owners WHERE user_id = $1`, [userId]);
+
+      let softDeleted = 0;
+      for (const id of ids) {
+        const remaining = await client.query(
+          `SELECT COUNT(*)::int AS count FROM transcript_item_owners WHERE transcript_item_id = $1`,
+          [id]
+        );
+        const count = Number(remaining.rows[0]?.count ?? 0);
+        if (count === 0) {
+          const update = await client.query(
+            `UPDATE transcript_items SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`,
+            [id]
+          );
+          softDeleted += update.rowCount ?? 0;
+        }
+      }
+      return softDeleted;
+    });
+  },
+
+  async syncHistoryItems(
+    items: Array<Omit<HistoryItem, "id" | "created_at"> & { created_at?: string }>,
+    ownerUserId: string
+  ): Promise<number> {
     if (!items.length) return 0;
     let inserted = 0;
     await withTransaction(async (client) => {
@@ -650,10 +802,16 @@ export const persistence = {
         const result = await client.query(
           `
             INSERT INTO transcript_items(
-              room_id, session_id, conversation_id, title, title_updated_at, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type, created_at
+              room_id, session_id, conversation_id, title, title_updated_at, utterance_id, speaker_identity, source_lang, target_lang, source_text, translated_text, event_type, created_at, deleted_at
             )
-            VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, NOW()), $6, $7, $8, $9, $10, $11, $12, COALESCE($13::timestamptz, NOW()))
-            ON CONFLICT (session_id, utterance_id, event_type) DO NOTHING
+            VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, NOW()), $6, $7, $8, $9, $10, $11, $12, COALESCE($13::timestamptz, NOW()), NULL)
+            ON CONFLICT (session_id, utterance_id, event_type)
+            DO UPDATE SET
+              conversation_id = EXCLUDED.conversation_id,
+              title = EXCLUDED.title,
+              title_updated_at = EXCLUDED.title_updated_at,
+              deleted_at = NULL
+            RETURNING id
           `,
           [
             item.room_id,
@@ -671,7 +829,18 @@ export const persistence = {
             item.created_at ?? null
           ]
         );
-        inserted += result.rowCount ?? 0;
+        if ((result.rowCount ?? 0) > 0) {
+          const transcriptId = Number(result.rows[0].id);
+          await client.query(
+            `
+              INSERT INTO transcript_item_owners(transcript_item_id, user_id, role)
+              VALUES ($1, $2, 'owner')
+              ON CONFLICT (transcript_item_id, user_id) DO NOTHING
+            `,
+            [transcriptId, ownerUserId]
+          );
+          inserted += 1;
+        }
       }
     });
     return inserted;
@@ -718,6 +887,107 @@ export const persistence = {
       return undefined;
     }
     return String(result.rows[0].session_id);
+  },
+
+  async userOwnsConversation(userId: string, conversationId: string): Promise<boolean> {
+    const result = await pool.query(
+      `
+        SELECT 1
+        FROM transcript_items t
+        JOIN transcript_item_owners tio ON tio.transcript_item_id = t.id
+        WHERE tio.user_id = $1
+          AND t.conversation_id = $2
+          AND t.deleted_at IS NULL
+        LIMIT 1
+      `,
+      [userId, conversationId]
+    );
+    return (result.rowCount ?? 0) > 0;
+  },
+
+  async countOwnedConversations(userId: string): Promise<number> {
+    const result = await pool.query(
+      `
+        SELECT COUNT(DISTINCT t.conversation_id)::int AS count
+        FROM transcript_items t
+        JOIN transcript_item_owners tio ON tio.transcript_item_id = t.id
+        WHERE tio.user_id = $1
+          AND t.deleted_at IS NULL
+      `,
+      [userId]
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  },
+
+  async getOwnedConversationIds(userId: string, conversationIds: string[]): Promise<Set<string>> {
+    if (!conversationIds.length) return new Set<string>();
+    const result = await pool.query(
+      `
+        SELECT DISTINCT t.conversation_id
+        FROM transcript_items t
+        JOIN transcript_item_owners tio ON tio.transcript_item_id = t.id
+        WHERE tio.user_id = $1
+          AND t.deleted_at IS NULL
+          AND t.conversation_id = ANY($2::text[])
+      `,
+      [userId, conversationIds]
+    );
+    return new Set(result.rows.map((row) => String(row.conversation_id)));
+  },
+
+  async getSessionOwnershipDebug(sessionId: string): Promise<{
+    session_id: string;
+    transcript_items_total: number;
+    active_items_total: number;
+    soft_deleted_items_total: number;
+    owner_links_total: number;
+    orphan_items_total: number;
+    owners: Array<{ user_id: string; owned_items: number }>;
+  }> {
+    const totals = await pool.query(
+      `
+        SELECT
+          COUNT(*)::int AS transcript_items_total,
+          COUNT(*) FILTER (WHERE t.deleted_at IS NULL)::int AS active_items_total,
+          COUNT(*) FILTER (WHERE t.deleted_at IS NOT NULL)::int AS soft_deleted_items_total,
+          COALESCE(SUM(owner_stats.owner_count), 0)::int AS owner_links_total,
+          COUNT(*) FILTER (WHERE owner_stats.owner_count = 0)::int AS orphan_items_total
+        FROM transcript_items t
+        LEFT JOIN (
+          SELECT transcript_item_id, COUNT(*)::int AS owner_count
+          FROM transcript_item_owners
+          GROUP BY transcript_item_id
+        ) owner_stats ON owner_stats.transcript_item_id = t.id
+        WHERE t.session_id = $1
+      `,
+      [sessionId]
+    );
+
+    const ownersResult = await pool.query(
+      `
+        SELECT tio.user_id, COUNT(*)::int AS owned_items
+        FROM transcript_item_owners tio
+        JOIN transcript_items t ON t.id = tio.transcript_item_id
+        WHERE t.session_id = $1
+        GROUP BY tio.user_id
+        ORDER BY owned_items DESC, tio.user_id ASC
+      `,
+      [sessionId]
+    );
+
+    const row = totals.rows[0] ?? {};
+    return {
+      session_id: sessionId,
+      transcript_items_total: Number(row.transcript_items_total ?? 0),
+      active_items_total: Number(row.active_items_total ?? 0),
+      soft_deleted_items_total: Number(row.soft_deleted_items_total ?? 0),
+      owner_links_total: Number(row.owner_links_total ?? 0),
+      orphan_items_total: Number(row.orphan_items_total ?? 0),
+      owners: ownersResult.rows.map((owner) => ({
+        user_id: String(owner.user_id),
+        owned_items: Number(owner.owned_items ?? 0)
+      }))
+    };
   },
 
   async upsertVoicePreference(input: {

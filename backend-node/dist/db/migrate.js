@@ -1,10 +1,20 @@
-import { readdir, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pool } from "./client.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const migrationsDir = join(__dirname, "migrations");
+const distMigrationsDir = join(__dirname, "migrations");
+const srcMigrationsDir = join(process.cwd(), "src", "db", "migrations");
+async function resolveMigrationsDir() {
+    try {
+        await access(distMigrationsDir);
+        return distMigrationsDir;
+    }
+    catch {
+        return srcMigrationsDir;
+    }
+}
 async function ensureMigrationTable() {
     await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -15,6 +25,7 @@ async function ensureMigrationTable() {
 }
 async function run() {
     await ensureMigrationTable();
+    const migrationsDir = await resolveMigrationsDir();
     const files = (await readdir(migrationsDir))
         .filter((name) => name.endsWith(".sql"))
         .sort();

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import deque
 from datetime import datetime, timezone
 from time import perf_counter
@@ -8,6 +9,8 @@ from uuid import uuid4
 from .models import SessionEvent, SimulateUtteranceRequest
 from ..providers.fallback import FallbackExhaustedError, run_with_fallback
 from ..providers.registry import ProviderBundle
+
+logger = logging.getLogger("worker.room-pipeline")
 
 
 def utc_now_iso() -> str:
@@ -187,7 +190,7 @@ class RoomPipelineSession:
                 providers=self.provider_bundle.translate_chain,
                 invoke=lambda provider: provider.translate(
                     stt_result.text,
-                    stt_result.detected_language,
+                    resolved_source_lang,
                     resolved_target_lang,
                     list(context),
                 ),
@@ -218,7 +221,7 @@ class RoomPipelineSession:
                 room_id=self.room_id,
                 utterance_id=utterance_id,
                 speaker_identity=request.speaker_identity,
-                source_lang=stt_result.detected_language,
+                source_lang=resolved_source_lang,
                 target_lang=resolved_target_lang,
                 timestamp=utc_now_iso(),
                 text=stt_result.text,
@@ -292,6 +295,14 @@ class RoomPipelineSession:
             )
             return result_events
         except FallbackExhaustedError as exhausted:
+            logger.warning(
+                "room_pipeline_fallback_exhausted session=%s room=%s utterance=%s stage=%s error=%s",
+                self.session_id,
+                self.room_id,
+                utterance_id,
+                exhausted.stage,
+                str(exhausted),
+            )
             result_events.extend(
                 self._warning_events(
                     warnings=exhausted.warnings,
@@ -317,6 +328,12 @@ class RoomPipelineSession:
             result_events.append(error_event)
             return result_events
         except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "room_pipeline_unhandled_error session=%s room=%s utterance=%s",
+                self.session_id,
+                self.room_id,
+                utterance_id,
+            )
             error_event = SessionEvent(
                 type="error",
                 session_id=self.session_id,
@@ -326,7 +343,12 @@ class RoomPipelineSession:
                 source_lang=resolved_source_lang,
                 target_lang=resolved_target_lang,
                 timestamp=utc_now_iso(),
-                details={"error": str(exc), "target_identity": resolved_target_identity},
+                details={
+                    "stage": "pipeline",
+                    "error": str(exc),
+                    "message": "Loi ket noi toi server dich thuat",
+                    "target_identity": resolved_target_identity,
+                },
             )
             self.events.append(error_event)
             result_events.append(error_event)

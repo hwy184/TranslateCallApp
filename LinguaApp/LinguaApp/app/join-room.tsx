@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -25,27 +25,31 @@ import {
   toRoomContextFromJoin
 } from '../src/services/roomService';
 import { friendlyErrorMessage } from '../src/services/errors';
+import { useSettingsStore } from '../src/store/settingsStore';
+import { useI18n } from '../src/i18n';
 
 function createIdentity(prefix: 'host' | 'guest') {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export default function JoinRoomScreen() {
+  const { t } = useI18n();
+  const { myLang } = useSettingsStore();
   const [roomId, setRoomId] = useState('');
-  const [selectedLang, setSelectedLang] = useState('en');
+  const [selectedLang, setSelectedLang] = useState(myLang);
   const [isJoining, setIsJoining] = useState(false);
 
   const { user, setRoomContext } = useAuthStore();
 
   const handleJoin = async () => {
     if (!user) {
-      Alert.alert('Cần đăng nhập', 'Vui lòng đăng nhập lại để vào phòng.');
+      Alert.alert(t('join_need_login_title'), t('join_need_login_msg'));
       router.replace('/(auth)/login');
       return;
     }
 
     if (!roomId.trim()) {
-      Alert.alert('Thông báo', 'Vui lòng nhập mã phòng 6 số.');
+      Alert.alert(t('join_invalid_code_title'), t('join_invalid_code_msg'));
       return;
     }
 
@@ -75,7 +79,7 @@ export default function JoinRoomScreen() {
       await setRoomContext(roomContext);
       router.push(`/call/${payload.room.roomId}`);
     } catch (err: unknown) {
-      Alert.alert('Vào phòng thất bại', friendlyErrorMessage(err));
+      Alert.alert(t('join_failed_title'), friendlyErrorMessage(err));
     } finally {
       setIsJoining(false);
     }
@@ -111,12 +115,12 @@ export default function JoinRoomScreen() {
               <View style={styles.iconCircle}>
                 <Ionicons name="keypad" size={44} color={Colors.primaryLight} />
               </View>
-              <Text style={styles.sectionTitle}>Nhập mã phòng</Text>
-              <Text style={styles.sectionSubtitle}>Mã phòng do host gửi sau khi tạo phòng.</Text>
+              <Text style={styles.sectionTitle}>{t('join_enter_code')}</Text>
+              <Text style={styles.sectionSubtitle}>{t('join_enter_code_sub')}</Text>
             </View>
 
             <View style={styles.inputCard}>
-              <Text style={styles.inputLabel}>Mã phòng</Text>
+              <Text style={styles.inputLabel}>{t('join_room_code')}</Text>
               <TextInput
                 style={styles.input}
                 value={roomId}
@@ -160,7 +164,7 @@ export default function JoinRoomScreen() {
               ) : (
                 <>
                   <Ionicons name="enter-outline" size={22} color={Colors.white} />
-                  <Text style={styles.primaryButtonText}>Vào phòng</Text>
+                  <Text style={styles.primaryButtonText}>{t('join_button')}</Text>
                 </>
               )}
             </TouchableOpacity>

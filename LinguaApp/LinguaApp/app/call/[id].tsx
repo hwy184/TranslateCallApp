@@ -14,12 +14,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Audio } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AudioSession } from '@livekit/react-native';
 import { LogLevel, Room, RoomEvent } from 'livekit-client';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { STORAGE_KEYS } from '../../src/constants';
 import { Colors, Typography, Spacing, BorderRadius } from '../../src/constants/theme';
 import { useAuthStore } from '../../src/store/authStore';
+import { useSettingsStore } from '../../src/store/settingsStore';
 import { endRoom, getRoomStatus, leaveParticipant, toShortCode, updateParticipantSettings } from '../../src/services/roomService';
 import { friendlyErrorMessage } from '../../src/services/errors';
 import { saveHistoryLocal, syncHistory, type ConversationHistory } from '../../src/services/historyService';
@@ -45,6 +48,8 @@ type RoomLifecycleEvent = {
   role?: 'host' | 'guest';
   timestamp?: string;
 };
+
+type HistorySaveChoice = 'local' | 'cloud';
 
 function parseDataChannelEvent(input: string): TimelineEvent | null {
   let parsed: any;
@@ -146,6 +151,9 @@ function buildLocalConversationHistory(input: {
     id: -1 - index,
     room_id: input.roomId,
     session_id: input.sessionId,
+    conversation_id: input.sessionId,
+    title: `Room ${input.roomCode} - ${new Date(ordered[0].timestamp).toLocaleString()}`,
+    title_updated_at: new Date().toISOString(),
     utterance_id: item.utteranceId ?? `${input.sessionId}:${index}`,
     speaker_identity: item.speakerIdentity ?? 'unknown',
     source_lang: item.sourceLang ?? '',
@@ -163,6 +171,7 @@ function buildLocalConversationHistory(input: {
     title: `Phòng ${input.roomCode} - ${new Date(ordered[0].timestamp).toLocaleString()}`,
     date: new Date(ordered[0].timestamp).toLocaleString(),
     lineCount: items.length,
+    is_synced: false,
     items,
   };
 }
@@ -174,6 +183,8 @@ export default function CallScreen() {
   const user = useAuthStore((s) => s.user);
   const livekitUrl = useAuthStore((s) => s.livekitUrl);
   const setRoomContext = useAuthStore((s) => s.setRoomContext);
+  const autoTranslate = useSettingsStore((s) => s.autoTranslate);
+  const showSubtitle = useSettingsStore((s) => s.showSubtitle);
 
   const roomRef = useRef<Room | null>(null);
   const micOnRef = useRef(false);
@@ -181,14 +192,16 @@ export default function CallScreen() {
   const remoteRoomClosedRef = useRef(false);
   const timelineRef = useRef<TimelineEvent[]>([]);
   const timelineListRef = useRef<FlatList<TimelineEvent> | null>(null);
-  const saveLocalHistoryRef = useRef<() => Promise<void>>(async () => undefined);
+  const saveLocalHistoryRef = useRef<() => Promise<boolean>>(async () => false);
+  const historySaveHandledRef = useRef(false);
   const localWorkerTrackRef = useRef<any | null>(null);
   const localParticipantIdentityRef = useRef(roomContext?.participantIdentity ?? '');
   const [status, setStatus] = useState('Đang chờ');
   const [connection, setConnection] = useState('mất kết nối');
   const [micOn, setMicOn] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(true);
-  const [sourceLanguage, setSourceLanguage] = useState<'vi' | 'en'>('vi');
+  const [sourceLanguage, setSourceLanguage] = useState<'vi' | 'en'>(useSettingsStore(s => s.myLang) as 'vi' | 'en');
+  const uiLang = useSettingsStore((s) => (s.myLang === 'en' ? 'en' : 'vi'));
   const [busy, setBusy] = useState<'connect' | 'leave' | null>('connect');
   const [error, setError] = useState<string | null>(null);
   const [peerStatus, setPeerStatus] = useState<'waiting' | 'connected' | 'left' | 'closed'>('waiting');
@@ -221,6 +234,43 @@ export default function CallScreen() {
           : roomContext?.role === 'host'
             ? 'Đang chờ khách'
             : 'Đang kết nối';
+  const ui = uiLang === 'en'
+    ? {
+        roomCode: 'Room code',
+        noRoomCode: 'No room code',
+        copy: 'Copy',
+        mine: 'You',
+        peer: 'Peer',
+        source: 'Original',
+        translated: 'Translated',
+        contentTitle: 'Translation stream',
+        contentHint: 'Right side is you, left side is the peer.',
+        subtitleOff: 'Subtitles are off in Settings.',
+        latest: 'Latest',
+      }
+    : {
+        roomCode: 'Mã phòng',
+        noRoomCode: 'Chưa có mã',
+        copy: 'Sao chép',
+        mine: 'Bạn',
+        peer: 'Người kia',
+        source: 'Gốc',
+        translated: 'Dịch',
+        contentTitle: 'Nội dung dịch',
+        contentHint: 'Bên phải là bạn, bên trái là người kia.',
+        subtitleOff: 'Phụ đề đang tắt trong Cài đặt.',
+        latest: 'Mới nhất',
+      };
+  const peerStatusText =
+    peerStatus === 'connected'
+      ? (uiLang === 'en' ? 'Peer is in the room' : 'Người kia đang trong phòng')
+      : peerStatus === 'left'
+        ? (uiLang === 'en' ? 'Peer left the room' : 'Đối tác đã rời phòng')
+        : peerStatus === 'closed'
+          ? (uiLang === 'en' ? 'Room has ended' : 'Phòng đã kết thúc')
+          : roomContext?.role === 'host'
+            ? (uiLang === 'en' ? 'Waiting for guest' : 'Đang chờ khách vào phòng')
+            : (uiLang === 'en' ? 'Connecting to host' : 'Đang kết nối với host');
 
   const decodePayload = useCallback((payload: Uint8Array): string => {
     if (typeof TextDecoder !== 'undefined') {
@@ -319,7 +369,7 @@ export default function CallScreen() {
             if (!roomEvent) return;
             if (roomEvent.type === 'participant.left' && roomEvent.participant_identity !== localParticipantIdentityRef.current) {
               setPeerStatus('left');
-              setStatus('Khách đã rời phòng. Mã phòng vẫn còn hiệu lực.');
+              setStatus('Đối tác đã rời phòng.');
             }
           if (roomEvent.type === 'room.closed' && roomContext.role === 'guest' && !remoteRoomClosedRef.current) {
             remoteRoomClosedRef.current = true;
@@ -417,17 +467,33 @@ export default function CallScreen() {
           if (identity && !identity.startsWith(WORKER_IDENTITY_PREFIX)) {
             setPeerStatus(roomContext.role === 'host' ? 'left' : 'closed');
             if (roomContext.role === 'guest' && !remoteRoomClosedRef.current) {
-              remoteRoomClosedRef.current = true;
-              void saveLocalHistoryRef.current();
-              Alert.alert('Phòng đã kết thúc', 'Host đã rời phòng hoặc kết thúc phòng gọi.', [
-                {
-                  text: 'OK',
-                  onPress: () => {
-                    void setRoomContext(null);
-                    router.replace('/(tabs)');
+              void (async () => {
+                try {
+                  const data = await getRoomStatus(roomContext.roomId);
+                  if (canceled) return;
+                  if (data.room.status !== 'closed') {
+                    setPeerStatus('waiting');
+                    setStatus('Host tạm mất kết nối. Đang chờ host quay lại...');
+                    return;
+                  }
+                } catch {
+                  // Keep guest in room on transient status failures.
+                  setPeerStatus('waiting');
+                  setStatus('Host tạm mất kết nối. Đang chờ host quay lại...');
+                  return;
+                }
+                remoteRoomClosedRef.current = true;
+                void saveLocalHistoryRef.current();
+                Alert.alert('Phòng đã kết thúc', 'Host đã rời phòng hoặc kết thúc phòng gọi.', [
+                  {
+                    text: 'OK',
+                    onPress: () => {
+                      void setRoomContext(null);
+                      router.replace('/(tabs)');
+                    },
                   },
-                },
-              ]);
+                ]);
+              })();
             }
           }
         };
@@ -460,6 +526,13 @@ export default function CallScreen() {
         );
         localParticipantIdentityRef.current = connectedIdentity;
         setLocalParticipantIdentity(connectedIdentity);
+        const hasPeerAlready = Array.from(room.remoteParticipants.values()).some((participant: any) => {
+          const identity = String(participant?.identity ?? '');
+          return identity && !identity.startsWith(WORKER_IDENTITY_PREFIX);
+        });
+        if (hasPeerAlready) {
+          setPeerStatus('connected');
+        }
         if (localWorkerTrackRef.current) {
           setTrackVolume(localWorkerTrackRef.current, 0);
         }
@@ -469,9 +542,14 @@ export default function CallScreen() {
             if (canceled) return;
             if (data.room.status === 'closed') {
               setPeerStatus('closed');
-              if (roomContext.role === 'guest' && !remoteRoomClosedRef.current) {
+              if (!remoteRoomClosedRef.current) {
                 remoteRoomClosedRef.current = true;
-                Alert.alert('Phòng đã kết thúc', 'Host đã kết thúc phòng gọi.', [
+                void saveLocalHistoryRef.current();
+                const closedMessage =
+                  roomContext.role === 'host'
+                    ? 'Phòng đã hết hạn hoặc đã được đóng trên server.'
+                    : 'Host đã kết thúc phòng gọi.';
+                Alert.alert('Phòng đã kết thúc', closedMessage, [
                   {
                     text: 'OK',
                     onPress: () => {
@@ -611,22 +689,75 @@ export default function CallScreen() {
   };
 
   const saveConversationHistoryIfNeeded = async () => {
-    if (!roomContext || !user) return;
+    if (!roomContext || !user) return false;
+    if (historySaveHandledRef.current) return false;
     const history = buildLocalConversationHistory({
       timeline: timelineRef.current,
       sessionId: roomContext.sessionId,
       roomId: roomContext.roomId,
       roomCode,
     });
-    if (!history) return;
-    if (user?.type === 'registered') {
-      await syncHistory(history.items);
-      setSaveNotice('Đã đồng bộ cuộc trò chuyện lên lịch sử đám mây.');
-      return;
+    if (!history) return false;
+
+    const getSavedHistoryPreference = async (): Promise<HistorySaveChoice | null> => {
+      const raw = await AsyncStorage.getItem(STORAGE_KEYS.HISTORY_SAVE_PREFERENCE);
+      if (raw === 'local' || raw === 'cloud') return raw;
+      return null;
+    };
+
+    const askRememberPreference = (): Promise<boolean> =>
+      new Promise((resolve) => {
+        Alert.alert('Ghi nhớ lựa chọn?', 'Lần sau tự áp dụng lựa chọn này.', [
+          { text: 'Không', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Có', onPress: () => resolve(true) },
+        ], { cancelable: false });
+      });
+
+    const askSaveChoice = (): Promise<HistorySaveChoice> =>
+      new Promise((resolve) => {
+        if (user.type !== 'registered') {
+          resolve('local');
+          return;
+        }
+        Alert.alert(
+          'Đồng bộ đám mây',
+          'Luôn lưu cục bộ. Bạn có muốn đồng bộ thêm lên đám mây không?',
+          [
+            { text: 'Chỉ lưu local', onPress: () => resolve('local') },
+            { text: 'Lưu lên đám mây', onPress: () => resolve('cloud') },
+          ],
+          { cancelable: false }
+        );
+      });
+
+    let choice = await getSavedHistoryPreference();
+    if (choice === 'cloud' && user.type !== 'registered') choice = 'local';
+
+    if (!choice) {
+      choice = await askSaveChoice();
+      const remember = await askRememberPreference();
+      if (remember) {
+        await AsyncStorage.setItem(STORAGE_KEYS.HISTORY_SAVE_PREFERENCE, choice);
+      }
     }
 
+    // Always persist local history first.
     await saveHistoryLocal(history);
+    if (choice === 'cloud' && user?.type === 'registered') {
+      try {
+        await syncHistory(history.items);
+        historySaveHandledRef.current = true;
+        setSaveNotice('Đã lưu local và đồng bộ lên đám mây.');
+      } catch {
+        historySaveHandledRef.current = true;
+        setSaveNotice('Đã lưu local. Đồng bộ đám mây thất bại, bạn có thể thử lại sau.');
+      }
+      return true;
+    }
+
+    historySaveHandledRef.current = true;
     setSaveNotice('Đã lưu cuộc trò chuyện vào lịch sử cục bộ.');
+    return true;
   };
   saveLocalHistoryRef.current = saveConversationHistoryIfNeeded;
 
@@ -706,7 +837,7 @@ export default function CallScreen() {
                     <Text style={styles.badgeSoftText}>{liveStatus}</Text>
                     </View>
                     <View style={styles.badgeGhost}>
-                      <Text style={styles.badgeGhostText}>{sourceLanguage === 'vi' ? 'Việt → Anh' : 'Anh → Việt'}</Text>
+                      <Text style={styles.badgeGhostText}>{sourceLanguage === 'vi' ? 'Việt -> Anh' : 'Anh -> Việt'}</Text>
                     </View>
                   </View>
                 </View>
@@ -720,15 +851,17 @@ export default function CallScreen() {
               </View>
               {!headerCollapsed && <View style={styles.roomCodePanel}>
                 <View style={styles.roomCodeTextBlock}>
-                  <Text style={styles.roomCodeLabel}>Mã phòng</Text>
-                  <Text style={styles.roomCodeValue} numberOfLines={1}>{roomCode || 'Chưa có mã'}</Text>
+                  <Text style={styles.roomCodeLabel}>{ui.roomCode}</Text>
+                  <Text style={styles.roomCodeValue} numberOfLines={1}>{roomCode || ui.noRoomCode}</Text>
                   <Text style={styles.roomCodeHint}>
-                    Gửi mã này cho người kia để vào lại phòng nếu mất kết nối.
+                    {uiLang === 'en'
+                      ? 'Share this code so the peer can rejoin if disconnected.'
+                      : 'Gửi mã này cho người kia để vào lại phòng nếu mất kết nối.'}
                   </Text>
                 </View>
                 <Pressable style={styles.roomCodeAction} onPress={copyRoomCode} disabled={!roomCode}>
                   <Ionicons name="copy" size={16} color={Colors.white} />
-                  <Text style={styles.roomCodeActionText}>Sao chép</Text>
+                  <Text style={styles.roomCodeActionText}>{ui.copy}</Text>
                 </Pressable>
               </View>}
               <View style={styles.peerStatusRow}>
@@ -740,36 +873,26 @@ export default function CallScreen() {
                     peerStatus === 'closed' && { backgroundColor: '#FF6B6B' },
                   ]}
                 />
-                <Text style={styles.meta}>
-                  {peerStatus === 'connected'
-                    ? 'Người kia đang trong phòng'
-                    : peerStatus === 'left'
-                      ? 'Khách đã rời phòng, mã vẫn có thể dùng để vào lại'
-                      : peerStatus === 'closed'
-                        ? 'Phòng đã kết thúc'
-                        : roomContext.role === 'host'
-                          ? 'Đang chờ khách vào phòng'
-                          : 'Đang kết nối với host'}
-                </Text>
+                <Text style={styles.meta}>{peerStatusText}</Text>
               </View>
               <View style={styles.roomStatusStrip}>
-                <Text style={styles.roomStatusText}>Trạng thái: {status}</Text>
-                <Text style={styles.roomStatusText}>Kết nối: {connection}</Text>
+                <Text style={styles.roomStatusText}>{uiLang === 'en' ? 'Status' : 'Trạng thái'}: {status}</Text>
+                <Text style={styles.roomStatusText}>{uiLang === 'en' ? 'Connection' : 'Kết nối'}: {connection}</Text>
               </View>
             </View>
 
             {!headerCollapsed && <View style={styles.controlsGrid}>
               <Pressable style={styles.controlBtn} onPress={toggleMic} disabled={busy !== null}>
                 <Ionicons name={micOn ? 'mic-off-outline' : 'mic-outline'} size={18} color="#07242F" />
-                <Text style={styles.controlText} numberOfLines={1}>{micOn ? 'Tắt mic' : 'Bật mic'}</Text>
+                <Text style={styles.controlText} numberOfLines={1}>{micOn ? (uiLang === 'en' ? 'Mute mic' : 'Tắt mic') : (uiLang === 'en' ? 'Unmute mic' : 'Bật mic')}</Text>
               </Pressable>
               <Pressable style={styles.controlBtn} onPress={toggleSpeaker} disabled={busy !== null}>
                 <Ionicons name={speakerOn ? 'volume-high-outline' : 'volume-mute-outline'} size={18} color="#07242F" />
-                <Text style={styles.controlText} numberOfLines={1}>{speakerOn ? 'Loa bật' : 'Loa tắt'}</Text>
+                <Text style={styles.controlText} numberOfLines={1}>{speakerOn ? (uiLang === 'en' ? 'Speaker on' : 'Loa bật') : (uiLang === 'en' ? 'Speaker off' : 'Loa tắt')}</Text>
               </Pressable>
               <Pressable style={styles.controlBtn} onPress={toggleLanguage} disabled={busy !== null}>
                 <Ionicons name="language-outline" size={18} color="#07242F" />
-                <Text style={styles.controlText} numberOfLines={1}>Ngôn ngữ: {sourceLanguage === 'vi' ? 'Việt' : 'Anh'}</Text>
+                <Text style={styles.controlText} numberOfLines={1}>{uiLang === 'en' ? 'Language' : 'Ngôn ngữ'}: {sourceLanguage === 'vi' ? (uiLang === 'en' ? 'Vietnamese' : 'Việt') : (uiLang === 'en' ? 'English' : 'Anh')}</Text>
               </Pressable>
               <Pressable style={styles.dangerBtn} onPress={leave} disabled={busy !== null}>
                 {busy === 'leave' ? (
@@ -777,7 +900,7 @@ export default function CallScreen() {
                 ) : (
                   <>
                     <Ionicons name={roomContext.role === 'host' ? 'stop-circle-outline' : 'exit-outline'} size={18} color="#2A0404" />
-                    <Text style={styles.dangerText} numberOfLines={1}>{roomContext.role === 'host' ? 'Kết thúc phòng' : 'Rời phòng'}</Text>
+                    <Text style={styles.dangerText} numberOfLines={1}>{roomContext.role === 'host' ? (uiLang === 'en' ? 'End room' : 'Kết thúc phòng') : (uiLang === 'en' ? 'Leave room' : 'Rời phòng')}</Text>
                   </>
                 )}
               </Pressable>
@@ -786,7 +909,7 @@ export default function CallScreen() {
             {!headerCollapsed && !!busy && busy === 'connect' && (
               <View style={styles.busy}>
                 <ActivityIndicator color={Colors.primaryLight} />
-                <Text style={styles.meta}>Đang kết nối cuộc gọi...</Text>
+                <Text style={styles.meta}>{uiLang === 'en' ? 'Connecting call...' : 'Đang kết nối cuộc gọi...'}</Text>
               </View>
             )}
 
@@ -794,15 +917,16 @@ export default function CallScreen() {
             {!headerCollapsed && !!saveNotice && <Text style={styles.notice}>{saveNotice}</Text>}
             {!headerCollapsed && !!workerSessionNotice && <Text style={styles.notice}>{workerSessionNotice}</Text>}
             {!headerCollapsed && connection !== 'connected' && (
-              <Text style={styles.meta}>Trạng thái kết nối lại: {connection}</Text>
+              <Text style={styles.meta}>{uiLang === 'en' ? 'Reconnection state' : 'Trạng thái kết nối lại'}: {connection}</Text>
             )}
           </View>
 
+          {showSubtitle ? (
           <View style={styles.timelineFrame}>
             <View style={styles.timelineFrameHeader}>
               <View>
-                <Text style={styles.subtitle}>Nội dung dịch</Text>
-                <Text style={styles.timelineHint}>Bên phải là bạn, bên trái là người kia.</Text>
+                <Text style={styles.subtitle}>{ui.contentTitle}</Text>
+                <Text style={styles.timelineHint}>{ui.contentHint}</Text>
               </View>
               <View style={styles.viewModeToggle}>
                 <Pressable
@@ -835,14 +959,17 @@ export default function CallScreen() {
               renderItem={({ item }) => {
                 const isMine = item.speakerIdentity === effectiveParticipantIdentity;
                 if (timelineViewMode === 'compact') {
-                  const speakerLabel = isMine ? 'Bạn' : 'Người kia';
+                  const speakerLabel = isMine ? ui.mine : ui.peer;
+                  const compactContent = autoTranslate
+                    ? (item.translatedText || item.text || '...')
+                    : (item.text || item.translatedText || '...');
                   return (
                     <View style={styles.compactRow}>
                       <Text style={styles.compactMeta}>
                         {new Date(item.timestamp).toLocaleTimeString()} · {speakerLabel}
                       </Text>
                       <Text style={styles.compactText} numberOfLines={2}>
-                        {item.translatedText || item.text || '...'}
+                        {compactContent}
                       </Text>
                     </View>
                   );
@@ -851,26 +978,36 @@ export default function CallScreen() {
                   <View style={[styles.messageRow, isMine ? styles.messageRowMine : styles.messageRowOther]}>
                     <View style={[styles.messageBubble, isMine ? styles.messageBubbleMine : styles.messageBubbleOther]}>
                       <View style={styles.messageMetaRow}>
-                        <Text style={styles.messageSpeaker}>{isMine ? 'Bạn' : 'Người kia'}</Text>
+                        <Text style={styles.messageSpeaker}>{isMine ? ui.mine : ui.peer}</Text>
                         <Text style={styles.messageMeta}>
-                          {new Date(item.timestamp).toLocaleTimeString()} · {item.sourceLang?.toUpperCase()} → {item.targetLang?.toUpperCase()}
+                          {new Date(item.timestamp).toLocaleTimeString()} · {item.sourceLang?.toUpperCase()} {'->'} {item.targetLang?.toUpperCase()}
                         </Text>
                       </View>
-                      {!!item.text && <Text style={styles.messageSource}>Gốc: {item.text}</Text>}
-                      {!!item.translatedText && <Text style={styles.messageTranslated}>Dịch: {item.translatedText}</Text>}
+                      {!!item.text && <Text style={styles.messageSource}>{ui.source}: {item.text}</Text>}
+                      {autoTranslate && !!item.translatedText && <Text style={styles.messageTranslated}>{ui.translated}: {item.translatedText}</Text>}
                     </View>
                   </View>
                 );
               }}
-              ListEmptyComponent={<Text style={styles.empty}>Chưa có câu nào được dịch. Hãy nói thử một câu để kiểm tra luồng realtime.</Text>}
+              ListEmptyComponent={<Text style={styles.empty}>Bắt đầu nói để dịch...</Text>}
             />
             {!isTimelinePinnedToBottom && (
               <Pressable style={styles.latestBtn} onPress={() => scrollTimelineToLatest(true)}>
                 <Ionicons name="arrow-down" size={14} color={Colors.white} />
-                <Text style={styles.latestBtnText}>Mới nhất</Text>
+                <Text style={styles.latestBtnText}>{ui.latest}</Text>
               </Pressable>
             )}
           </View>
+          ) : (
+            <View style={styles.timelineFrame}>
+              <View style={styles.timelineFrameHeader}>
+                <View>
+                  <Text style={styles.subtitle}>{ui.contentTitle}</Text>
+                  <Text style={styles.timelineHint}>{ui.subtitleOff}</Text>
+                </View>
+              </View>
+            </View>
+          )}
         </View>
       </SafeAreaView>
     </LinearGradient>
@@ -1243,4 +1380,8 @@ const styles = StyleSheet.create({
     fontWeight: Typography.bold,
   },
 });
+
+
+
+
 

@@ -109,6 +109,9 @@ export interface HistoryItem {
   id: number;
   room_id: string;
   session_id: string;
+  conversation_id?: string;
+  title?: string;
+  title_updated_at?: string;
   utterance_id: string;
   speaker_identity: string;
   source_lang: string;

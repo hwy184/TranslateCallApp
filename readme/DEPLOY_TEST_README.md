@@ -1,256 +1,159 @@
-# LinguaVoiceTranslation - Hướng Dẫn Khởi Động Và Chạy Test
+﻿# LinguaVoiceTranslation - Deploy/Test Guide
 
-Tài liệu này dùng để bàn giao nhanh cho người khác chạy test bản MVP hiện tại.
-Mục tiêu là bật được backend, worker, database và cho app mobile kết nối vào server để tạo phòng, vào phòng, gọi thử và kiểm tra dịch realtime.
+Tai lieu nay huong dan khoi dong stack local, public backend qua ngrok, va ket noi app mobile.
 
-## 1. Phạm vi tài liệu này
+## 1. Pham vi
 
-- Đây là hướng dẫn chạy test nội bộ tạm thời, chưa phải tài liệu deploy VPS production.
-- Media realtime hiện dùng `LiveKit Cloud`.
-- Server cục bộ gồm:
-  - `backend-node`
-  - `worker-python`
-  - `postgres`
-- Mobile app hiện đang mặc định gọi API qua:
-  - `http://192.168.1.9:3000/api/v1`
+- Muc tieu: chay demo/test MVP on dinh.
+- Khong phai tai lieu production hardening day du.
+- Media realtime dung LiveKit Cloud.
 
-Nếu máy host đổi mạng hoặc đổi IP LAN, phải cập nhật lại IP này trong app trước khi build lại.
+## 2. Cau truc chinh
 
-## 2. Cấu trúc dự án cần biết
-
-- App mobile: `F:\AI_local_model\LinguaApp\LinguaApp`
 - Backend: `F:\AI_local_model\backend-node`
 - Worker: `F:\AI_local_model\worker-python`
 - Infra: `F:\AI_local_model\infra`
+- Mobile app: `F:\AI_local_model\LinguaApp\LinguaApp`
 
-## 3. Điều kiện trước khi chạy
+## 3. Dieu kien truoc khi chay
 
-Máy host cần có:
+- Docker Desktop dang chay.
+- Node.js + npm da cai.
+- Android Studio/emulator hoac thiet bi that.
+- File secret Google ton tai: `F:\AI_local_model\secrets\gcp-sa.json`.
 
-- Docker Desktop đang chạy
-- Android Studio / emulator nếu test bằng máy ảo
-- Node.js và npm
-- Expo CLI qua `npx expo`
-- File secret Google service account:
-  - `F:\AI_local_model\secrets\gcp-sa.json`
-
-Biến môi trường local cần có:
+Can co cac file env:
 
 - `backend-node/.env`
-- `worker-python/.env` nếu có cấu hình riêng ngoài `.env.example`
+- `worker-python/.env` (neu can override `.env.example`)
+- `LinguaApp/LinguaApp/.env`
 
-Tối thiểu cần đúng các giá trị:
+## 4. Cau hinh backend `.env` toi thieu
 
-- `LIVEKIT_URL`
-- `LIVEKIT_API_KEY`
-- `LIVEKIT_API_SECRET`
-- `GOOGLE_APPLICATION_CREDENTIALS`
+```env
+NODE_ENV=production
+TRUST_PROXY_HOPS=1
+CORS_ALLOWED_ORIGINS=https://<your-ngrok-domain>
+RATE_LIMIT_WINDOW_MS=60000
+RATE_LIMIT_AUTH_MAX=10
+RATE_LIMIT_ROOMS_MAX=60
+RATE_LIMIT_GLOBAL_MAX=120
+PORT=8080
 
-## 4. Cách khởi động server
+LIVEKIT_URL=wss://<livekit-host>
+LIVEKIT_API_KEY=<livekit-key>
+LIVEKIT_API_SECRET=<livekit-secret>
 
-Mở PowerShell tại thư mục:
+JWT_SECRET=<strong-random-secret>
+WORKER_INTERNAL_SECRET=<strong-random-secret>
+
+WORKER_INTERNAL_URL=http://127.0.0.1:8090
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/voice_translation
+```
+
+Luu y:
+
+- `CORS_ALLOWED_ORIGINS` phai dung origin frontend/public URL ban dang goi API.
+- Khong commit secret that vao git.
+
+## 5. Khoi dong server
 
 ```powershell
 cd F:\AI_local_model\infra
-```
-
-Khởi động toàn bộ stack:
-
-```powershell
 docker compose up -d --build
 ```
 
-Kiểm tra trạng thái container:
+Kiem tra:
 
 ```powershell
 docker compose ps
-```
-
-Kỳ vọng:
-
-- `voice_postgres` chạy và healthy
-- `voice_worker` chạy và healthy
-- `voice_backend` chạy và healthy
-
-## 5. Kiểm tra health trước khi đưa tester vào
-
-Kiểm tra backend:
-
-```powershell
 Invoke-RestMethod http://localhost:3000/health | ConvertTo-Json -Depth 6
-```
-
-Kiểm tra worker:
-
-```powershell
 Invoke-RestMethod http://localhost:8000/health | ConvertTo-Json -Depth 6
 ```
 
-Kỳ vọng:
+Ky vong: backend/worker/postgres healthy.
 
-- backend trả `status: ok` hoặc `degraded` có lý do rõ
-- worker trả `status: ok`
-- worker có trường `active_sessions`
+## 6. Public backend bang ngrok
 
-## 6. Cách chạy app mobile
+### 6.1 Cai va auth ngrok (1 lan)
 
-Vào thư mục app:
+```powershell
+ngrok config add-authtoken <YOUR_TOKEN>
+```
+
+### 6.2 Mo tunnel den backend host port 3000
+
+```powershell
+ngrok http 3000
+```
+
+Lay URL HTTPS duoc cap, vi du:
+
+`https://xxxx.ngrok-free.dev`
+
+### 6.3 Kiem tra tunnel
+
+```powershell
+Invoke-WebRequest https://xxxx.ngrok-free.dev/health
+Invoke-WebRequest https://xxxx.ngrok-free.dev/api/v1/client/config
+```
+
+Neu `200 OK` + JSON thi tunnel OK.
+
+## 7. Cau hinh mobile app `.env`
+
+File: `LinguaApp/LinguaApp/.env`
+
+```env
+EXPO_PUBLIC_API_BASE_URL=https://xxxx.ngrok-free.dev/api/v1
+EXPO_PUBLIC_LIVEKIT_URL=
+```
+
+`EXPO_PUBLIC_LIVEKIT_URL` de trong de app lay dong tu backend `/api/v1/client/config`.
+
+## 8. Build/chay app Android
 
 ```powershell
 cd F:\AI_local_model\LinguaApp\LinguaApp
-```
-
-Chạy Android:
-
-```powershell
+npx expo start -c
 npx expo run:android --device
 ```
 
-Hoặc nếu dùng emulator:
+Neu app da luu URL cu, go app khoi may roi cai lai.
+
+## 9. Troubleshooting nhanh
+
+### 9.1 App bao khong ket noi duoc backend
+
+- Xac nhan backend local OK: `http://localhost:3000/health`.
+- Xac nhan ngrok forward dung port `3000` (khong phai `8080`).
+- Xac nhan app dung dung `EXPO_PUBLIC_API_BASE_URL`.
+- Xoa app/cache va build lai (`npx expo start -c`).
+
+### 9.2 Trinh duyet hien `Cannot GET /api/v1`
+
+- Binh thuong, vi `/api/v1` khong co route GET root.
+- Test dung endpoint:
+  - `/health`
+  - `/api/v1/client/config`
+
+### 9.3 Ngrok URL thay doi sau moi lan chay
+
+- Cap nhat lai:
+  - `LinguaApp/LinguaApp/.env`
+  - `backend-node/.env` (`CORS_ALLOWED_ORIGINS`)
+- Restart backend va rebuild app.
+
+## 10. Dung stack
 
 ```powershell
-npx expo run:android
-```
-
-Lưu ý:
-
-- App hiện mặc định trỏ API về `192.168.1.9`
-- Nếu tester dùng điện thoại/tablet thật, thiết bị phải truy cập được IP LAN của máy host
-- Nếu app giữ cache URL cũ, hãy gỡ app hoặc clear app data rồi cài lại
-
-## 7. Luồng test cơ bản cho tester
-
-1. Mở app trên 2 thiết bị
-2. Một người đăng nhập hoặc vào với vai trò host
-3. Tạo phòng
-4. Sao chép mã phòng
-5. Thiết bị còn lại nhập mã phòng để vào
-6. Test 2 chiều:
-   - host nói tiếng Việt
-   - guest nói tiếng Anh
-7. Kiểm tra:
-   - người nghe chỉ nghe giọng AI đã dịch
-   - người nói không nghe lại giọng AI của chính mình
-   - timeline có text gốc và bản dịch
-   - host end thì guest tự out
-   - guest leave thì host vẫn ở lại được
-
-## 8. Log cần xem khi có lỗi
-
-Log backend:
-
-```powershell
-docker compose logs --tail=100 backend
-```
-
-Log worker:
-
-```powershell
-docker compose logs --tail=100 worker
-```
-
-Log postgres:
-
-```powershell
-docker compose logs --tail=100 postgres
-```
-
-Log frontend xem trực tiếp ở terminal `expo run:android`.
-
-## 9. Lỗi thường gặp và cách xử lý nhanh
-
-### 9.1 Request timeout trên tablet hoặc emulator
-
-Nguyên nhân thường gặp:
-
-- thiết bị không vào được `192.168.1.9`
-- app đang giữ URL cũ trong local storage
-- máy host đổi IP LAN nhưng app chưa rebuild
-- backend chưa chạy
-
-Cách xử lý:
-
-1. Mở trình duyệt trên thiết bị thử:
-
-```text
-http://192.168.1.9:3000/health
-```
-
-2. Nếu không mở được:
-   - kiểm tra host còn đúng IP `192.168.1.9` không
-   - kiểm tra host và thiết bị có cùng mạng không
-   - kiểm tra firewall Windows
-
-3. Nếu điện thoại vào được nhưng tablet không vào được:
-   - clear app data trên tablet
-   - gỡ app và cài lại
-
-### 9.2 Không nghe được âm thanh dịch
-
-Kiểm tra:
-
-- worker có log:
-  - `livekit_bridge_stt_text`
-  - `livekit_bridge_tts_pcm_ready`
-  - `livekit_bridge_tts_published`
-- frontend có đang vào đúng room không
-- speaker trên máy có đang bật không
-
-### 9.3 Người nói nghe lại bản dịch của chính mình
-
-Bản hiện tại đã siết luồng để chỉ phát đúng track `translated_to_{localParticipant}`.
-Nếu vẫn gặp:
-
-1. rebuild app
-2. clear app data
-3. test lại trên 2 thiết bị
-4. nếu vẫn lỗi, lấy log frontend + worker để rà tiếp track subscription
-
-### 9.4 Worker không lên
-
-Kiểm tra:
-
-- file `secrets/gcp-sa.json` có tồn tại không
-- `docker compose logs worker`
-- `worker-python/.env` và `.env.example`
-
-### 9.5 Backend lên nhưng app không login/create room được
-
-Kiểm tra:
-
-- `docker compose ps`
-- backend `/health`
-- database có healthy không
-- `backend-node/.env`
-
-## 10. Cách dừng hệ thống
-
-Tại thư mục `F:\AI_local_model\infra`:
-
-```powershell
+cd F:\AI_local_model\infra
 docker compose down
 ```
 
-Nếu chỉ muốn restart service:
+Hoac restart rieng:
 
 ```powershell
 docker compose restart backend
 docker compose restart worker
 ```
-
-## 11. Checklist nhanh trước khi đưa người khác test
-
-- [ ] Docker Desktop đang chạy
-- [ ] `docker compose up -d --build` đã chạy xong
-- [ ] `docker compose ps` cho thấy `backend`, `worker`, `postgres` đang chạy
-- [ ] `http://localhost:3000/health` truy cập được
-- [ ] `http://localhost:8000/health` truy cập được
-- [ ] Máy host đang có IP LAN `192.168.1.9`
-- [ ] App mobile là bản mới nhất
-- [ ] Nếu tester bị timeout, đã thử clear app data hoặc cài lại app
-
-## 12. Ghi chú hiện trạng
-
-- Đây là cách chạy test nội bộ trong mạng LAN.
-- Nếu muốn người ngoài mạng vẫn vào được mà không cần bật máy cá nhân, cần deploy lên VPS/public server.
-- MVP hiện ưu tiên ổn định luồng demo và kiểm chứng realtime translation trước khi chuyển sang deploy internet public.

@@ -4,6 +4,7 @@ import type { AuthResponse } from '../types/api';
 export interface LoginRequest {
   email: string;
   password: string;
+  forceLogoutOthers?: boolean;
 }
 
 export interface RegisterRequest {
@@ -13,7 +14,15 @@ export interface RegisterRequest {
 }
 
 export const login = async (data: LoginRequest): Promise<AuthResponse> => {
-  return apiClient.post<AuthResponse>('/auth/login', { email: data.email, password: data.password }, true);
+  return apiClient.post<AuthResponse>(
+    '/auth/login',
+    {
+      email: data.email,
+      password: data.password,
+      force_logout_others: data.forceLogoutOthers ?? false,
+    },
+    true
+  );
 };
 
 export const register = async (data: RegisterRequest): Promise<AuthResponse> => {

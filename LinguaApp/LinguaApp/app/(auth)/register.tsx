@@ -19,6 +19,7 @@ import { Colors, Typography, Spacing, BorderRadius } from '../../src/constants/t
 import { LinguaLogo } from '../../src/components/LinguaLogo';
 import { GlobeIllustration } from '../../src/components/GlobeIllustration';
 import { register } from '../../src/services/authService';
+import { syncLocalHistoryToCloud } from '../../src/services/historyService';
 import { useAuthStore } from '../../src/store/authStore';
 import { friendlyErrorMessage } from '../../src/services/errors';
 
@@ -57,6 +58,7 @@ export default function RegisterScreen() {
         displayName: displayName.trim() || undefined,
       });
       await setAuth(res.user, res.session);
+      await syncLocalHistoryToCloud().catch(() => 0);
       router.replace('/(tabs)');
     } catch (err: unknown) {
       Alert.alert('Đăng ký thất bại', friendlyErrorMessage(err));

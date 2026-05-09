@@ -1,11 +1,23 @@
-FROM node:22-alpine AS base
+FROM node:22-alpine AS deps
 WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
 
-COPY package.json ./
-RUN npm install
-
-COPY tsconfig.json ./
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json package-lock.json tsconfig.json ./
 COPY src ./src
+RUN npm run build
+
+FROM node:22-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY --from=build /app/dist ./dist
+COPY src/db/migrations ./src/db/migrations
 
 EXPOSE 8080
-CMD ["sh", "-c", "npm run migrate && npm run dev"]
+CMD ["sh", "-c", "node dist/db/migrate.js && node dist/index.js"]
