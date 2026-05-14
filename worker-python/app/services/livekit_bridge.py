@@ -12,7 +12,6 @@ import wave
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-import av
 import httpx
 import numpy as np
 
@@ -20,8 +19,14 @@ from ..config.settings import Settings
 from ..sessions.models import SessionEvent, SimulateUtteranceRequest
 from ..sessions.room_pipeline_session import RoomPipelineSession
 from .google_auth import GoogleAccessTokenProvider
+from .vad_backend import build_vad_backend
 
 logger = logging.getLogger("worker.livekit-bridge")
+
+try:
+    import av  # type: ignore
+except Exception:  # noqa: BLE001
+    av = None
 
 try:
     from livekit import api, rtc  # type: ignore
@@ -89,6 +94,11 @@ class LiveKitBridge:
         self._stt_duplicate_suppress_window_ms = settings.stt_duplicate_suppress_window_ms
         self._stt_force_segment_peak_rms = settings.stt_force_segment_peak_rms
         self._stt_force_segment_min_voiced_ms = settings.stt_force_segment_min_voiced_ms
+        self._vad_backend = build_vad_backend(
+            backend=settings.vad_backend,
+            energy_threshold=self._stt_energy_threshold,
+            silero_threshold=settings.vad_silero_threshold,
+        )
         self._edge_tts_voice_default = settings.edge_tts_voice_default
         self._edge_tts_rate = settings.edge_tts_rate
         self._local_stt_enabled = settings.local_stt_enabled
@@ -499,7 +509,8 @@ class LiveKitBridge:
                 rms = audioop.rms(data, 2)
                 peak_rms = max(peak_rms, rms)
                 segment_peak_rms = max(segment_peak_rms, rms)
-                voiced = rms >= self._stt_energy_threshold
+                vad = self._vad_backend.detect(data, sample_rate)
+                voiced = vad.voiced
 
                 now = asyncio.get_running_loop().time()
                 suppressed_until = context.echo_suppress_until_by_speaker.get(speaker_identity, 0.0)
@@ -555,7 +566,7 @@ class LiveKitBridge:
                     if accept_normal or accept_peak_force:
                         source_lang_hint = self._resolve_source_lang_hint(context, speaker_identity)
                         logger.info(
-                            "livekit_bridge_vad_segment_accepted session=%s participant=%s speech_ms=%s voiced_ms=%s voiced_ratio=%.2f peak_rms=%s mode=%s",
+                            "livekit_bridge_vad_segment_accepted session=%s participant=%s speech_ms=%s voiced_ms=%s voiced_ratio=%.2f peak_rms=%s mode=%s backend=%s score=%.4f",
                             context.session_id,
                             speaker_identity,
                             segment_speech_ms,
@@ -563,6 +574,8 @@ class LiveKitBridge:
                             voiced_ratio,
                             segment_peak,
                             "normal" if accept_normal else "peak_force",
+                            vad.backend,
+                            vad.score,
                         )
                         task = asyncio.create_task(
                             self._handle_speech_segment(
@@ -577,7 +590,7 @@ class LiveKitBridge:
                         task.add_done_callback(context.audio_tasks.discard)
                     else:
                         logger.info(
-                            "livekit_bridge_vad_segment_dropped session=%s participant=%s speech_ms=%s voiced_ms=%s voiced_ratio=%.2f peak_rms=%s threshold=%s",
+                            "livekit_bridge_vad_segment_dropped session=%s participant=%s speech_ms=%s voiced_ms=%s voiced_ratio=%.2f peak_rms=%s threshold=%s backend=%s score=%.4f",
                             context.session_id,
                             speaker_identity,
                             segment_speech_ms,
@@ -585,6 +598,8 @@ class LiveKitBridge:
                             voiced_ratio,
                             segment_peak,
                             self._stt_energy_threshold,
+                            vad.backend,
+                            vad.score,
                         )
 
                 frame_count += 1
@@ -1038,6 +1053,9 @@ class LiveKitBridge:
         target_sample_rate: int,
         target_channels: int,
     ) -> bytes | None:
+        if av is None:
+            logger.warning("livekit_bridge_av_unavailable_for_decode")
+            return None
         decoded = bytearray()
         try:
             with av.open(io.BytesIO(payload), mode="r") as container:

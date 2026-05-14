@@ -39,8 +39,14 @@ Environment keys:
 - `OPENAI_API_KEY=` (optional, used as paid fallback)
 - `OPENAI_TRANSLATE_MODEL=gpt-4o-mini`
 - `OPENAI_STT_MODEL=whisper-1`
+- `VAD_BACKEND=energy` (`energy` or `silero`)
+- `VAD_SILERO_THRESHOLD=0.5` (silero speech probability threshold)
 - `EDGE_TTS_VOICE_DEFAULT=en-US-AriaNeural`
 
 Realtime note:
 
-- LiveKit bridge ingests remote audio frames, segments speech with energy-based VAD, transcribes with Google Cloud Speech first (service-account), then Gemini/OpenAI/local fallback. Translation uses `google-first` profile and TTS publishes Google Cloud TTS first, then Gemini/Edge fallback.
+- LiveKit bridge ingests remote audio frames with a pluggable VAD backend:
+- `VAD_BACKEND=energy`: use RMS/energy threshold segmentation (baseline).
+- `VAD_BACKEND=silero`: use Silero VAD model scoring.
+- If Silero dependencies are unavailable or fail at runtime init, worker auto-falls back to energy-based VAD without breaking call flow.
+- STT transcribes with Google Cloud Speech first (service-account), then Gemini/OpenAI/local fallback. Translation uses `google-first` profile and TTS publishes Google Cloud TTS first, then Gemini/Edge fallback.

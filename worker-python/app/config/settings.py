@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     stt_duplicate_suppress_window_ms: int = Field(default=3500, ge=0, le=30000)
     stt_force_segment_peak_rms: int = Field(default=4500, ge=200, le=30000)
     stt_force_segment_min_voiced_ms: int = Field(default=80, ge=0, le=500)
+    vad_backend: str = "energy"
+    vad_silero_threshold: float = Field(default=0.5, ge=0.1, le=0.95)
     edge_tts_voice_default: str = "en-US-AriaNeural"
     edge_tts_rate: str = "+0%"
 
