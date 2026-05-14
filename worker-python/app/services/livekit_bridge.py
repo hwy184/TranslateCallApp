@@ -950,9 +950,11 @@ class LiveKitBridge:
             if text:
                 return text
 
-            # Second pass fallback: disable Whisper VAD and remove language hint.
-            # This helps when very short/soft utterances get filtered out.
+            # Second pass fallback: disable Whisper VAD but keep the selected language hint.
+            # This preserves the participant's explicit language choice even on weaker input.
             retry_kwargs: dict[str, object] = {"beam_size": 3, "vad_filter": False}
+            if language:
+                retry_kwargs["language"] = language
             retry_segments, _retry_info = model.transcribe(audio, **retry_kwargs)
             retry_text = " ".join(
                 seg.text.strip() for seg in retry_segments if getattr(seg, "text", "").strip()

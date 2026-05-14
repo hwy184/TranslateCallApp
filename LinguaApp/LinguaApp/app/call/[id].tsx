@@ -586,7 +586,6 @@ export default function CallScreen() {
         if (!micOk) {
           setStatus('Đã kết nối (thử lại cấu hình mic)');
         }
-        setSourceLanguage(roomContext.role === 'host' ? 'vi' : 'en');
         setStatus('Đã kết nối (micro bật)');
       } catch (e) {
         setError(friendlyErrorMessage(e));
